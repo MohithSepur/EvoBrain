@@ -6,7 +6,6 @@ Authors: albertfgu & krandiash
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange, reduce
 
 
 class Decoder(nn.Module):
@@ -82,13 +81,6 @@ class SequenceDecoder(Decoder):
         elif self.mode == "first":
             restrict = lambda x: x[..., :l_output, :]
         elif self.mode == "pool":
-            restrict = lambda x: (
-                torch.cumsum(x, dim=-2)
-                / torch.arange(
-                    1, 1 + x.size(-2), device=x.device, dtype=x.dtype
-                ).unsqueeze(-1)
-            )[..., -l_output:, :]
-
             def restrict(x):
                 L = x.size(-2)
                 s = x.sum(dim=-2, keepdim=True)
@@ -99,7 +91,7 @@ class SequenceDecoder(Decoder):
                     s = s.flip(-2)
                 denom = torch.arange(
                     L - l_output + 1, L + 1, dtype=x.dtype, device=x.device
-                )
+                ).unsqueeze(-1)
                 s = s / denom
                 return s
 
@@ -109,10 +101,11 @@ class SequenceDecoder(Decoder):
         elif self.mode == "ragged":
             assert lengths is not None, "lengths must be provided for ragged mode"
             # remove any additional padding (beyond max length of any sequence in the batch)
-            restrict = lambda x: x[..., : max(lengths), :]
+            max_len = int(lengths.max()) if torch.is_tensor(lengths) else max(lengths)
+            restrict = lambda x: x[..., :max_len, :]
         else:
             raise NotImplementedError(
-                "Mode must be ['last' | 'first' | 'pool' | 'sum']"
+                "Mode must be ['last' | 'first' | 'pool' | 'sum' | 'ragged']"
             )
 
         # Restrict to actual length of sequence

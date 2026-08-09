@@ -1,5 +1,6 @@
 import sys
-sys.path.append('../')
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pyedflib
 import utils
 from constants import INCLUDED_CHANNELS, FREQUENCY
@@ -18,9 +19,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from data.data_utils import comp_xcorr, keep_topk, computeFFT, getSeizureTimes, get_swap_pairs
 
-repo_paths = str(Path.cwd()).split('EvoBrain')
-repo_paths = Path(repo_paths[0]).joinpath('EvoBrain')
-sys.path.append(repo_paths)
+repo_paths = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FILEMARKER_DIR = Path(repo_paths).joinpath('data/file_markers_detection')
 
 
@@ -49,7 +48,7 @@ def computeSliceMatrix(
     #assert resampled_freq == FREQUENCY
 
     # get seizure times
-    seizure_times = getSeizureTimes(edf_fn.split('.edf')[0])
+    seizure_times = getSeizureTimes(edf_fn)
 
     # Iterating through signal
     physical_clip_len = int(FREQUENCY * clip_len)
@@ -459,11 +458,17 @@ class SeizureDataset(Dataset):
         elif self.adj_mat_dir is not None:
             indiv_adj_mat = self._get_combined_graph(swap_nodes)
             indiv_supports = self._compute_supports(indiv_adj_mat)
+            time_steps = eeg_clip.shape[0]
+            indiv_supports = torch.stack(indiv_supports)
+            supports_seq = indiv_supports.repeat(time_steps, 1, 1, 1)
+            adj_mat_seq = np.stack([indiv_adj_mat for _ in range(time_steps)])
         else:
             indiv_supports = []
             indiv_adj_mat = []
+            supports_seq = torch.tensor([])
+            adj_mat_seq = torch.tensor([])
 
-        if seq_len != self.max_seq_len:
+        if seq_len.item() != self.max_seq_len:
             print(f"seq_len: {seq_len}")
             print(f"supports_seq.shape: {supports_seq.shape}")
             print(f"adj_mat_seq.shape: {adj_mat_seq.shape}")

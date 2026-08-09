@@ -93,10 +93,8 @@ class BIOTEncoder(nn.Module):
         self.positional_encoding = PositionalEncoding(emb_size)
 
         # channel token, N_channels >= your actual channels
-        self.channel_tokens = nn.Embedding(n_channels, 256)
-        self.index = nn.Parameter(
-            torch.LongTensor(range(n_channels)), requires_grad=False
-        )
+        self.channel_tokens = nn.Embedding(n_channels, emb_size)
+        self.register_buffer("index", torch.LongTensor(range(n_channels)))
 
     def stft(self, sample):
         spectral = torch.stft( 
@@ -111,9 +109,13 @@ class BIOTEncoder(nn.Module):
 
     def forward(self, x, n_channel_offset=0, perturb=False):
         """
-        x: [batch_size, channel, ts]
+        x: [batch_size, channel, ts] or [batch_size, seq_len, channel, feat]
         output: [batch_size, emb_size]
         """
+        if x.dim() == 4:
+            x = x.permute(0, 2, 1, 3)
+            x = x.reshape(x.shape[0], x.shape[1], -1)
+            
         emb_seq = []
         for i in range(x.shape[1]):
             channel_spec_emb = self.stft(x[:, i : i + 1, :])
@@ -121,7 +123,7 @@ class BIOTEncoder(nn.Module):
             batch_size, ts, _ = channel_spec_emb.shape
             # (batch_size, ts, emb)
             channel_token_emb = (
-                self.channel_tokens(self.index[i + n_channel_offset])
+                self.channel_tokens(self.index[(i + n_channel_offset) % len(self.index)])
                 .unsqueeze(0)
                 .unsqueeze(0)
                 .repeat(batch_size, ts, 1)
@@ -152,10 +154,6 @@ class BIOTClassifier(nn.Module):
         self.classifier = ClassificationHead(emb_size, n_classes)
 
     def forward(self, x):
-        # print(x.shape)
-        x = x.permute(0, 2, 1, 3)
-        x= x.reshape(x.shape[0], x.shape[1], -1)
-        # print(x.shape)
         hidden = self.biot(x)
         x = self.classifier(hidden)
         return x, hidden
@@ -167,9 +165,9 @@ class UnsupervisedPretrain(nn.Module):
         super(UnsupervisedPretrain, self).__init__()
         self.biot = BIOTEncoder(emb_size, heads, depth, n_channels, **kwargs)
         self.prediction = nn.Sequential(
-            nn.Linear(256, 256),
+            nn.Linear(emb_size, emb_size),
             nn.GELU(),
-            nn.Linear(256, 256),
+            nn.Linear(emb_size, emb_size),
         )
 
     def forward(self, x, n_channel_offset=0):
@@ -183,7 +181,7 @@ class UnsupervisedPretrain(nn.Module):
 class SupervisedPretrain(nn.Module):
     def __init__(self, emb_size=256, heads=8, depth=4, **kwargs):
         super().__init__()
-        self.biot = BIOTEncoder(emb_size=emb_size, heads=heads, depth=depth)
+        self.biot = BIOTEncoder(emb_size=emb_size, heads=heads, depth=depth, **kwargs)
         self.classifier_chb_mit = ClassificationHead(emb_size, 1)
         self.classifier_iiic_seizure = ClassificationHead(emb_size, 6)
         self.classifier_tuab = ClassificationHead(emb_size, 1)
@@ -207,8 +205,8 @@ class SupervisedPretrain(nn.Module):
 if __name__ == "__main__":
     x = torch.randn(16, 2, 2000)
     model = BIOTClassifier(n_fft=200, hop_length=200, depth=4, heads=8)
-    out = model(x)
-    print(out.shape)
+    logits, hidden = model(x)
+    print(logits.shape, hidden.shape)
 
     model = UnsupervisedPretrain(n_fft=200, hop_length=200, depth=4, heads=8)
     out1, out2 = model(x)

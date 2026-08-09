@@ -5,7 +5,7 @@ import h5py
 from tqdm import tqdm
 from dataloader_detection import computeSliceMatrix
 
-FILE_MARKER_DIR = "./file_markers_detection"
+FILE_MARKER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "file_markers_detection")
 
 
 def main(
@@ -61,7 +61,7 @@ def main(
         '_timeStepSize' +
         str(time_step_size))
     if not os.path.exists(output_dir):
-        os.mkdir(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
 
     delayed_results = []
     delayed_files = []

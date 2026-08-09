@@ -9,17 +9,13 @@ import torch.optim as optim
 import math
 import utils
 from data.dataloader_detection import load_dataset_detection
-from data.dataloader_chb import load_dataset_chb
-from data.dataloader_prediction import load_dataset_prediction
 from args import get_args
 from collections import OrderedDict
 from json import dumps
 from model.gru_gcn import GRU_GCN_classification
 from model.DCRNN import DCRNNModel_classification, DCRNNModel_nextTimePred
 from model.EvoBrain import EvoBrain_classification
-from model.EGCN import EvolveGCN_Model_classification
 from model.BIOT import BIOTClassifier
-from model.graphs4mer import GraphS4mer
 from model.lstm import LSTMModel
 from model.cnnlstm import CNN_LSTM
 from tensorboardX import SummaryWriter
@@ -30,7 +26,6 @@ import copy
 import pandas as pd
 import sklearn
 import time
-import torch
 torch.autograd.set_detect_anomaly(True)
 
 def main(args):
@@ -62,6 +57,7 @@ def main(args):
     log.info('Building dataset...')
     if args.dataset == 'CHBMIT':
         print("Loading CHBMIT dataset...")
+        from data.dataloader_chb import load_dataset_chb
         dataloaders, datasets, scaler = load_dataset_chb(
             task = args.task,
             input_dir=args.input_dir,
@@ -105,6 +101,7 @@ def main(args):
 
         
         elif args.task == 'prediction':
+            from data.dataloader_prediction import load_dataset_prediction
             dataloaders, datasets, scaler = load_dataset_prediction(
                 input_dir=args.input_dir,
                 raw_data_dir=args.raw_data_dir,
@@ -132,12 +129,14 @@ def main(args):
         model = DCRNNModel_classification(
             args=args, num_classes=args.num_classes, device=device)
     elif args.model_name == "evolvegcn":
+        from model.EGCN import EvolveGCN_Model_classification
         model = EvolveGCN_Model_classification(args=args, num_classes=args.num_classes, device=device)
     elif args.model_name == "evobrain":
         if args.agg != "max":
             log.info("Using EvoBrain with aggregation method: {}".format(args.agg))
         model = EvoBrain_classification(args=args, num_classes=args.num_classes, device=device)
     elif args.model_name == "graphs4mer":
+        from model.graphs4mer import GraphS4mer
         model = GraphS4mer(num_classes=args.num_classes, max_seq_len=args.max_seq_len, num_nodes=args.num_nodes)
     elif args.model_name == "gru_gcn":
         model = GRU_GCN_classification(args=args, num_classes=args.num_classes, device=device)

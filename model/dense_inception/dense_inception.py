@@ -80,7 +80,7 @@ class DenseInception(nn.Module):
         
         s_0 = self.inception_4(s)        
         s_0 = self.conv1x1_4(s_0)
-        s_1 = self.inception_4(s_0)
+        s_1 = self.inception_5(s_0)
         s_1 = self.conv1x1_5(s_1)
         s_cat_10 = torch.cat([s_0,s_1],1)
         s = self.conv1x1_54(s_cat_10)
@@ -88,7 +88,7 @@ class DenseInception(nn.Module):
         
         s_0 = self.inception_6(s)        
         s_0 = self.conv1x1_6(s_0)
-        s_1 = self.inception_6(s_0)
+        s_1 = self.inception_7(s_0)
         s_1 = self.conv1x1_7(s_1)
         s_cat_10 = torch.cat([s_0,s_1],1)
         s = self.conv1x1_76(s_cat_10)

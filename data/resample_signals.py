@@ -1,6 +1,6 @@
 import sys
-
-sys.path.append("../")
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from constants import INCLUDED_CHANNELS, FREQUENCY
 from data_utils import resampleData, getEDFsignals, getOrderedChannels
 from tqdm import tqdm
@@ -58,7 +58,7 @@ def resample_all(raw_edf_dir, save_dir):
                 hf.create_dataset("resampled_signal", data=signal_array)
                 hf.create_dataset("resample_freq", data=FREQUENCY)
 
-        except BaseException as e:
+        except Exception as e:
             print(f"An error occurred: {e}")  
             print(f"Failed to process {edf_fn}")
             failed_files.append(edf_fn)

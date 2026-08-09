@@ -9,7 +9,6 @@ from __future__ import division
 from __future__ import print_function
 
 import numpy as np
-import utils
 import torch
 import torch.nn as nn
 
@@ -32,6 +31,7 @@ class DiffusionGraphConv(nn.Module):
                 for directed graph
         """
         super(DiffusionGraphConv, self).__init__()
+        self._num_supports = num_supports
         num_matrices = num_supports * max_diffusion_step + 1
         self._input_size = input_dim + hid_dim
         self._num_nodes = num_nodes
@@ -61,7 +61,7 @@ class DiffusionGraphConv(nn.Module):
         shape = L.shape
         i = torch.LongTensor(np.vstack((L.row, L.col)).astype(int))
         v = torch.FloatTensor(L.data)
-        return torch.sparse.FloatTensor(i, v, torch.Size(shape))
+        return torch.sparse_coo_tensor(i, v, torch.Size(shape))
 
     def forward(self, supports, inputs, state, output_size, bias_start=0.0):
         # Reshape input and state to (batch_size, num_nodes,
@@ -84,20 +84,16 @@ class DiffusionGraphConv(nn.Module):
         else:
             supports = supports.transpose(0,1)
             for support in supports:
-                # (batch, num_nodes, input_dim+hidden_dim)
-                # print(f"support shape: {support.shape}")
-                # print(f"x0 shape: {x0.shape}")
-                x1 = torch.matmul(support, x0)
-                # (batch, ?, num_nodes, input_dim+hidden_dim)
-                x = self._concat(x, x1)
+                x0_t = x0
+                x1_t = torch.matmul(support, x0_t)
+                x = self._concat(x, x1_t)
                 for k in range(2, self._max_diffusion_step + 1):
-                    # (batch, num_nodes, input_dim+hidden_dim)
-                    x2 = 2 * torch.matmul(support, x1) - x0
+                    x2_t = 2 * torch.matmul(support, x1_t) - x0_t
                     x = self._concat(
-                        x, x2)  # (batch, ?, num_nodes, input_dim+hidden_dim)
-                    x1, x0 = x2, x1
+                        x, x2_t)  # (batch, ?, num_nodes, input_dim+hidden_dim)
+                    x1_t, x0_t = x2_t, x1_t
 
-        num_matrices = len(supports) * \
+        num_matrices = self._num_supports * \
             self._max_diffusion_step + 1  # Adds for x itself
         # (batch, num_nodes, num_matrices, input_hidden_size)
         x = torch.transpose(x, dim0=1, dim1=2)
@@ -194,10 +190,13 @@ class DCGRUCell(nn.Module):
             state: (B, num_nodes * num_units)
         """
         output_size = 2 * self._num_units
-        if self._use_gc_for_ru:
-            fn = self.dconv_gate
-        else:
-            fn = self._fc
+        if not self._use_gc_for_ru:
+            raise NotImplementedError(
+                "use_gc_for_ru=False requires a fully-connected gate layer, "
+                "which is not implemented. Set use_gc_for_ru=True (default) "
+                "to use diffusion graph convolution for the reset/update gates."
+            )
+        fn = self.dconv_gate
         value = torch.sigmoid(
             fn(supports, inputs, state, output_size, bias_start=1.0))
         value = torch.reshape(value, (-1, self._num_nodes, output_size))
@@ -214,17 +213,7 @@ class DCGRUCell(nn.Module):
 
         return output, new_state
 
-    @staticmethod
-    def _concat(x, x_):
-        x_ = torch.unsqueeze(x_, 0)
-        return torch.cat([x, x_], dim=0)
-
-    def _gconv(self, supports, inputs, state, output_size, bias_start=0.0):
-        pass
-
-    def _fc(self, supports, inputs, state, output_size, bias_start=0.0):
-        pass
-
-    def init_hidden(self, batch_size):
+    def init_hidden(self, batch_size, device=None):
         # state: (B, num_nodes * num_units)
-        return torch.zeros(batch_size, self._num_nodes * self._num_units)
+        return torch.zeros(batch_size, self._num_nodes * self._num_units,
+                           device=device)

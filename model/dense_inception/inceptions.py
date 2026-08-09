@@ -53,8 +53,6 @@ class Inception(nn.Module):
 
         
         self.branchC_1 = BasicConv2d(in_channels, pool_features, False, kernel_size = (filter_size[2],1), stride = 1, padding = (int((filter_size[2] - 1)/2),0))
-        self.branchC_1 = BasicConv2d(in_channels, pool_features, False, kernel_size= (21,1), stride = 1, padding = (10,0))
-        self.branchC_2 = BasicConv2d(pool_features, pool_features, False, kernel_size= (21,1), stride = 1, padding = (10,0))
         self.branchC_2 = BasicConv2d(pool_features, pool_features, False, kernel_size = (filter_size[2],1), stride = 1,  padding = (int((filter_size[2] - 1)/2),0))
  
 
@@ -94,8 +92,6 @@ class Inception3(nn.Module):
 
         
         self.branchC_1 = BasicConv2d(in_channels, pool_features, False, kernel_size = (filter_size[2],1), stride = 1, padding = (int((filter_size[2] - 1)/2),0))
-        self.branchC_1 = BasicConv2d(in_channels, pool_features, False, kernel_size= (21,1), stride = 1, padding = (10,0))
-        self.branchC_2 = BasicConv2d(pool_features, pool_features, False, kernel_size= (21,1), stride = 1, padding = (10,0))
         self.branchC_2 = BasicConv2d(pool_features, pool_features, False, kernel_size = (filter_size[2],1), stride = 1,  padding = (int((filter_size[2] - 1)/2),0))
  
 
@@ -137,8 +133,6 @@ class Inception4(nn.Module):
 
         
         self.branchC_1 = BasicConv2d(in_channels, pool_features, False, kernel_size = (filter_size[2],1), stride = 1, padding = (int((filter_size[2] - 1)/2),0))
-        self.branchC_1 = BasicConv2d(in_channels, pool_features, False, kernel_size= (21,1), stride = 1, padding = (10,0))
-        self.branchC_2 = BasicConv2d(pool_features, pool_features, False, kernel_size= (21,1), stride = 1, padding = (10,0))
         self.branchC_2 = BasicConv2d(pool_features, pool_features, False, kernel_size = (filter_size[2],1), stride = 1,  padding = (int((filter_size[2] - 1)/2),0))
  
 

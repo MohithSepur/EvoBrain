@@ -11,7 +11,6 @@ from collections import OrderedDict, defaultdict
 from itertools import repeat
 from datetime import datetime
 from pathlib import Path
-from collections import defaultdict
 from scipy.sparse import linalg
 import sklearn
 import matplotlib.cm as cm
@@ -154,7 +153,7 @@ class CheckpointSaver:
 
 
 def load_model_checkpoint(checkpoint_file, model, optimizer=None):
-    checkpoint = torch.load(checkpoint_file)
+    checkpoint = torch.load(checkpoint_file, weights_only=False)
     model.load_state_dict(checkpoint['model_state'])
     if optimizer is not None:
         optimizer.load_state_dict(checkpoint['optimizer_state'])
@@ -352,7 +351,7 @@ def last_relevant_pytorch(output, lengths, batch_first=True):
     masks = masks.unsqueeze(time_dimension)
     masks = masks.to(output.device)
     last_output = output.gather(time_dimension, masks).squeeze(time_dimension)
-    last_output.to(output.device)
+    last_output = last_output.to(output.device)
 
     return last_output
 

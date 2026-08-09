@@ -69,7 +69,7 @@ class Linear(nn.Module):
     """
     Linear but recurrent-like module.
     Input:  (T, B, D_in)
-    Output: (T, B, D_out), last_state=(B, D_in)  (same as original)
+    Output: (T, B, D_out), last_state=(B, D_out)
     """
 
     def __init__(self, feat_input_size: int, feat_target_size: int) -> None:
@@ -85,8 +85,7 @@ class Linear(nn.Module):
         T, B, _ = tensor.shape
         out = self.lin(tensor.reshape(T * B, self.feat_input_size))
         out = out.reshape(T, B, self.feat_target_size)
-        # 仕様通り、last_state は入力の最終時刻を返す
-        return out, tensor[-1]
+        return out, out[-1]
 
 
 class Static(nn.Module):
@@ -329,8 +328,8 @@ class GNNx2(nn.Module):
             x = self.gnn2(self.activate(x), edge_index, edge_weight=edge_weight)
         else:
             # GAT / GINE use edge_attr
-            x = self.gnn1(node_feats, edge_index, edge_feats.squeeze())
-            x = self.gnn2(self.activate(x), edge_index, edge_feats.squeeze())
+            x = self.gnn1(node_feats, edge_index, edge_feats.squeeze(-1))
+            x = self.gnn2(self.activate(x), edge_index, edge_feats.squeeze(-1))
         return x
 
     def forward(
@@ -432,11 +431,6 @@ class GRU_GCN(nn.Module):
 
         feat_input_size_edge = 1
 
-        print("feat_input_size_edge:", feat_input_size_edge)
-        print("feat_input_size_node:", feat_input_size_node)
-        print("embed_inside_size:", embed_inside_size)
-        print("feat_target_size:", feat_target_size)
-
         self.reduce_edge = reduce_edge
         self.reduce_node = reduce_node
         self.embed_inside_size = embed_inside_size
@@ -489,10 +483,7 @@ class GRU_GCN(nn.Module):
 
         node_in = inputs.reshape(T, B * N, F)
 
-        if isinstance(self.snn_node, (nn.GRU, nn.LSTM)):
-            node_seq, _ = self.snn_node(node_in)  # (T, B*N, D)
-        else:
-            node_seq, _ = self.snn_node(node_in)
+        node_seq, _ = self.snn_node(node_in)
 
         node_seq = node_seq.reshape(T, B, N, self.embed_inside_size)
         node_final = self.activate(node_seq[-1])  # (B, N, D_node)
@@ -512,10 +503,7 @@ class GRU_GCN(nn.Module):
 
         edge_in = adj.permute(1, 0, 2, 3).reshape(T, B * N * N, 1)
 
-        if isinstance(self.snn_edge, (nn.GRU, nn.LSTM)):
-            edge_seq, _ = self.snn_edge(edge_in) 
-        else:
-            edge_seq, _ = self.snn_edge(edge_in)  
+        edge_seq, _ = self.snn_edge(edge_in)
 
         edge_seq = edge_seq.reshape(T, B, N * N, self.embed_inside_size)
         edge_final = edge_seq[-1]  # (B, E=N*N, D_edge)

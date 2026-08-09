@@ -16,7 +16,7 @@ def get_args():
                         help='Device to run the model.')
     parser.add_argument('--save_dir',
                         type=str,
-                        default="/nas/share/r_kotoge/code/tts/result",
+                        default="./result",
                         help='Directory to save the outputs and checkpoints.')
     parser.add_argument(
         '--load_model_path',
@@ -71,11 +71,11 @@ def get_args():
                         help='Time step size in seconds.')
     parser.add_argument('--input_dir',
                         type=str,
-                        default="/nas/share/r_kotoge/code/tts/resampled",
+                        default="./resampled",
                         help='Dir to resampled EEG signals (.h5 files).')
     parser.add_argument('--raw_data_dir',
                         type=str,
-                        default="/nas/share/r_kotoge/code/tts/TUSZ",
+                        default="./TUSZ",
                         help='Dir to TUH data with raw EEG signals.')
     parser.add_argument('--preproc_dir',
                         type=str,
@@ -140,7 +140,7 @@ def get_args():
     parser.add_argument(
         '--use_fft',
         default=True,
-        action='store_true',
+        action=argparse.BooleanOptionalAction,
         help='Whether the input data is Fourier transformed EEG signal or raw EEG.')
     
     parser.add_argument(
@@ -203,7 +203,7 @@ def get_args():
                         help='weighted, micro or macro.')
     parser.add_argument('--data_augment',
                         default=True,
-                        action='store_true',
+                        action=argparse.BooleanOptionalAction,
                         help='Whether perform data augmentation.')
     parser.add_argument(
         '--patience',

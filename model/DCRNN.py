@@ -7,7 +7,6 @@ licensed under the MIT License.
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-from data.data_utils import computeFFT
 from model.cell import DCGRUCell
 from torch.autograd import Variable
 import utils
@@ -92,8 +91,9 @@ class DCRNNEncoder(nn.Module):
             output_inner = []
             # print(f"support shape: {supports.shape}")
             for t in range(seq_length):
+                supp_t = supports[:, min(t, supports.shape[1] - 1), ...] if (isinstance(supports, torch.Tensor) and supports.dim() >= 4) else supports
                 _, hidden_state = self.encoding_cells[i_layer](
-                    supports[:, t, :, :], current_inputs[t, ...], hidden_state)
+                    supp_t, current_inputs[t, ...], hidden_state)
                 output_inner.append(hidden_state)
             output_hidden.append(hidden_state)
             current_inputs = torch.stack(output_inner, dim=0).to(
@@ -124,11 +124,6 @@ class DCGRUDecoder(nn.Module):
         self._device = device
         self.dropout = dropout
 
-        cell = DCGRUCell(input_dim=hid_dim, num_units=hid_dim,
-                         max_diffusion_step=max_diffusion_step,
-                         num_nodes=num_nodes, nonlinearity=dcgru_activation,
-                         filter_type=filter_type)
-
         decoding_cells = list()
         # first layer of the decoder
         decoding_cells.append(
@@ -141,7 +136,14 @@ class DCGRUDecoder(nn.Module):
                 filter_type=filter_type))
         # construct multi-layer rnn
         for _ in range(1, num_rnn_layers):
-            decoding_cells.append(cell)
+            decoding_cells.append(
+                DCGRUCell(
+                    input_dim=hid_dim,
+                    num_units=hid_dim,
+                    max_diffusion_step=max_diffusion_step,
+                    num_nodes=num_nodes,
+                    nonlinearity=dcgru_activation,
+                    filter_type=filter_type))
 
         self.decoding_cells = nn.ModuleList(decoding_cells)
         self.projection_layer = nn.Linear(self.hid_dim, self.output_dim)
@@ -182,10 +184,11 @@ class DCGRUDecoder(nn.Module):
         current_input = go_symbol  # (batch_size, num_nodes * input_dim)
         for t in range(seq_length):
             next_input_hidden_state = []
+            supp_t = supports[:, min(t, supports.shape[1] - 1), :, :] if (isinstance(supports, torch.Tensor) and supports.dim() == 5) else supports
             for i_layer in range(0, self.num_rnn_layers):
                 hidden_state = initial_hidden_state[i_layer]
                 output, hidden_state = self.decoding_cells[i_layer](
-                    supports, current_input, hidden_state)
+                    supp_t, current_input, hidden_state)
                 current_input = output
                 next_input_hidden_state.append(hidden_state)
             initial_hidden_state = torch.stack(next_input_hidden_state, dim=0)
@@ -334,7 +337,7 @@ class DCRNNModel_nextTimePred(nn.Module):
         decoder_inputs = torch.transpose(decoder_inputs, dim0=0, dim1=1)
 
         # initialize the hidden state of the encoder
-        init_hidden_state = self.encoder.init_hidden(batch_size).cuda()
+        init_hidden_state = self.encoder.init_hidden(batch_size).to(self._device)
 
         # encoder
         # (num_layers, batch, rnn_units*num_nodes)

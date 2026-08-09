@@ -72,7 +72,7 @@ def getOrderedChannels(file_name, verbose, labels_object, channel_names):
     for ch in channel_names:
         try:
             ordered_channels.append(labels.index(ch))
-        except:
+        except Exception:
             if verbose:
                 print(file_name + " failed to get channel " + ch)
             raise Exception("channel not match")
@@ -123,7 +123,7 @@ def getSeizureClass(file_name, target_labels_dict=None, file_type="edf"):
     elif file_type == "tse":
         tse_file = file_name
     else:
-        raise valueError("Unrecognized file type.")
+        raise ValueError("Unrecognized file type.")
 
     seizure_class = []
     with open(tse_file) as f:
@@ -150,7 +150,7 @@ def getEDFsignals(edf):
     for i in range(n):
         try:
             signals[i, :] = edf.readSignal(i)
-        except:
+        except Exception:
             pass
     return signals
 

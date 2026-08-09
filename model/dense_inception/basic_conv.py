@@ -1,8 +1,5 @@
-import numpy as np
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.autograd import Variable
 
 
 class BasicConv1d(nn.Module):
@@ -32,5 +29,3 @@ class BasicConv2d(nn.Module):
         if(self.use_batchnorm):
             x = self.bn(x)
         return F.relu(x, inplace=True)
-    
-    

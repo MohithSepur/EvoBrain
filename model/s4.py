@@ -1768,6 +1768,13 @@ Adapted from https://github.com/HazyResearch/state-spaces/blob/main/example.py
 """
 
 
+class DownAvgPool(nn.Module):
+    def __init__(self, d_input, stride, expand, transposed=True):
+        super().__init__()
+        self.pool = nn.AvgPool1d(stride, stride=stride)
+    def forward(self, x):
+        return self.pool(x)
+
 class S4Model(nn.Module):
     def __init__(
         self,
@@ -1894,11 +1901,11 @@ class S4Model(nn.Module):
                         ],
                         dim=0,
                     ) # (B, d_model)
-                    x = self.decoder(x)
+                x = self.decoder(x)
             else:
                 x = self.decoder(x)  # (B, L, d_model) -> (B, L_out, d_output)
 
-            if x.shape[1] == 1:
+            if x.dim() > 1 and x.shape[1] == 1:
                 x = x.squeeze(1)
 
         return x
