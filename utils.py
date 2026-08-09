@@ -320,13 +320,17 @@ def eval_dict(y_pred, y, y_prob=None, file_names=None, average='macro'):
         
         if len(set(y)) <= 2:
             # confusion_matrix を使用して特異度(specificity)を計算
-            tn, fp, fn, tp = confusion_matrix(y_true=y, y_pred=y_pred).ravel()
+            cm_res = confusion_matrix(y_true=y, y_pred=y_pred, labels=[0, 1])
+            tn, fp, fn, tp = cm_res.ravel()
             specificity = tn / (tn + fp) if (tn + fp) > 0 else 0  # ゼロ除算の回避
             scores_dict['specificity'] = specificity
 
             # y_prob が与えられている場合は AUROC を計算
-            if y_prob is not None:
-                scores_dict['auroc'] = roc_auc_score(y_true=y, y_score=y_prob)
+            if y_prob is not None and len(set(y)) > 1:
+                try:
+                    scores_dict['auroc'] = roc_auc_score(y_true=y, y_score=y_prob)
+                except ValueError:
+                    pass
 
     return scores_dict, pred_dict, true_dict
 
@@ -344,11 +348,13 @@ def thresh_max_f1(y_true, y_prob):
     fscore = []
     n_thresh = len(thresholds)
     for idx in range(n_thresh):
-        curr_f1 = (2 * precision[idx] * recall[idx]) / \
-            (precision[idx] + recall[idx])
+        denom = precision[idx] + recall[idx]
+        curr_f1 = (2 * precision[idx] * recall[idx]) / denom if denom > 0 else 0.0
         if not (np.isnan(curr_f1)):
             fscore.append(curr_f1)
             thresh_filt.append(thresholds[idx])
+    if len(fscore) == 0:
+        return 0.5
     # locate the index of the largest f score
     ix = np.argmax(np.array(fscore))
     best_thresh = thresh_filt[ix]
@@ -391,7 +397,7 @@ def build_sparse_matrix(L):
     shape = L.shape
     i = torch.LongTensor(np.vstack((L.row, L.col)).astype(int))
     v = torch.FloatTensor(L.data)
-    return torch.sparse.FloatTensor(i, v, torch.Size(shape))
+    return torch.sparse_coo_tensor(i, v, torch.Size(shape))
 
 
 def compute_sampling_threshold(cl_decay_steps, global_step):
@@ -423,9 +429,10 @@ class StandardScaler:
             device: device
             mask: shape (batch_size,) nodes where some signals are masked
         """
-        mean = self.mean.copy()
-        std = self.std.copy()
-        if len(mean.shape) == 0:
+        import copy
+        mean = self.mean.copy() if hasattr(self.mean, 'copy') else copy.deepcopy(self.mean)
+        std = self.std.copy() if hasattr(self.std, 'copy') else copy.deepcopy(self.std)
+        if not hasattr(mean, 'shape') or len(mean.shape) == 0:
             mean = [mean]
             std = [std]
         if is_tensor:

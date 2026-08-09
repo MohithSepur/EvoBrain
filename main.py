@@ -129,15 +129,21 @@ def main(args):
         model = DCRNNModel_classification(
             args=args, num_classes=args.num_classes, device=device)
     elif args.model_name == "evolvegcn":
-        from model.EGCN import EvolveGCN_Model_classification
-        model = EvolveGCN_Model_classification(args=args, num_classes=args.num_classes, device=device)
+        try:
+            from model.EGCN import EvolveGCN_Model_classification
+            model = EvolveGCN_Model_classification(args=args, num_classes=args.num_classes, device=device)
+        except ImportError:
+            raise NotImplementedError("Model 'evolvegcn' module (model.EGCN) is not available.")
     elif args.model_name == "evobrain":
         if args.agg != "max":
             log.info("Using EvoBrain with aggregation method: {}".format(args.agg))
         model = EvoBrain_classification(args=args, num_classes=args.num_classes, device=device)
     elif args.model_name == "graphs4mer":
-        from model.graphs4mer import GraphS4mer
-        model = GraphS4mer(num_classes=args.num_classes, max_seq_len=args.max_seq_len, num_nodes=args.num_nodes)
+        try:
+            from model.graphs4mer import GraphS4mer
+            model = GraphS4mer(num_classes=args.num_classes, max_seq_len=args.max_seq_len, num_nodes=args.num_nodes)
+        except ImportError:
+            raise NotImplementedError("Model 'graphs4mer' module (model.graphs4mer) is not available.")
     elif args.model_name == "gru_gcn":
         model = GRU_GCN_classification(args=args, num_classes=args.num_classes, device=device)
     elif args.model_name == "BIOT":
@@ -183,9 +189,12 @@ def main(args):
         # Train
         train(model, dataloaders, args, device, args.save_dir, log, tbx)
 
-        # Load best model after training finished
+        # Load best model after training finished if saved, else keep final weights
         best_path = os.path.join(args.save_dir, 'best.pth.tar')
-        model = utils.load_model_checkpoint(best_path, model)
+        if os.path.exists(best_path):
+            model = utils.load_model_checkpoint(best_path, model)
+        else:
+            log.info('No best checkpoint found at {}, retaining final model weights.'.format(best_path))
         model = model.to(device)
 
     else:
@@ -305,7 +314,8 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
                     raise NotImplementedError
                 if logits.shape[-1] == 1:
                     logits = logits.view(-1)          
-                loss = loss_fn(logits, y)
+                target = y.long() if isinstance(loss_fn, nn.CrossEntropyLoss) else y.float()
+                loss = loss_fn(logits, target)
                 loss_val = loss.item()
 
                 # Backward
@@ -346,10 +356,11 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
                                         log,
                                         is_test=False,
                                         nll_meter=nll_meter)
+                metric_val = eval_results.get(args.metric_name, eval_results.get('F1', None))
                 best_path = saver.save(epoch,
                                        model,
                                        optimizer,
-                                       eval_results[args.metric_name])
+                                       metric_val)
 
                 # Accumulate patience for early stopping
                 if eval_results['loss'] < prev_val_loss:
@@ -454,7 +465,8 @@ def evaluate(
             
 
             # Update loss
-            loss = loss_fn(logits, y)
+            target = y.long() if isinstance(loss_fn, nn.CrossEntropyLoss) else y.float()
+            loss = loss_fn(logits, target)
             if nll_meter is not None:
                 nll_meter.update(loss.item(), batch_size)
 
@@ -512,8 +524,6 @@ def evaluate(
         best_thresh = utils.thresh_max_f1(y_true=y_true_all, y_prob=y_prob_all)
         # update dev set y_pred based on best_thresh
         y_pred_all = (y_prob_all > best_thresh).astype(int)  # (batch_size, )
-    else:
-        best_thresh = best_thresh
 
     scores_dict, _, _ = utils.eval_dict(y_pred=y_pred_all,
                                         y=y_true_all,

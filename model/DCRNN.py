@@ -91,7 +91,7 @@ class DCRNNEncoder(nn.Module):
             output_inner = []
             # print(f"support shape: {supports.shape}")
             for t in range(seq_length):
-                supp_t = supports[:, min(t, supports.shape[1] - 1), ...] if (isinstance(supports, torch.Tensor) and supports.dim() >= 4) else supports
+                supp_t = supports[:, min(t, supports.shape[1] - 1), ...] if (isinstance(supports, torch.Tensor) and supports.dim() >= 4 and supports.shape[1] == seq_length) else supports
                 _, hidden_state = self.encoding_cells[i_layer](
                     supp_t, current_inputs[t, ...], hidden_state)
                 output_inner.append(hidden_state)
@@ -184,7 +184,7 @@ class DCGRUDecoder(nn.Module):
         current_input = go_symbol  # (batch_size, num_nodes * input_dim)
         for t in range(seq_length):
             next_input_hidden_state = []
-            supp_t = supports[:, min(t, supports.shape[1] - 1), :, :] if (isinstance(supports, torch.Tensor) and supports.dim() == 5) else supports
+            supp_t = supports[:, min(t, supports.shape[1] - 1), :, :] if (isinstance(supports, torch.Tensor) and supports.dim() == 5 and supports.shape[1] == seq_length) else supports
             for i_layer in range(0, self.num_rnn_layers):
                 hidden_state = initial_hidden_state[i_layer]
                 output, hidden_state = self.decoding_cells[i_layer](

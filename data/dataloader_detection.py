@@ -205,6 +205,11 @@ class SeizureDataset(Dataset):
             'Set_seq2seq_' +
             str(max_seq_len) +
             's_nosz.txt')
+        if not os.path.exists(seizure_file) or not os.path.exists(nonSeizure_file):
+            raise FileNotFoundError(
+                f"File marker files for max_seq_len={max_seq_len}s not found in {FILEMARKER_DIR}. "
+                f"Missing: {seizure_file} or {nonSeizure_file}"
+            )
         self.file_tuples = parseTxtFiles(
             split,
             seizure_file,
