@@ -660,7 +660,7 @@ class EvoBrain(nn.Module):
         self.edge_transform = torch.nn.Linear(embed_inside_size, 1)
         self.edge_activate = activatize("softplus")
         
-        self.feat_target_size = feat_target_size + int(concat) * embed_inside_size
+        self.feat_target_size = feat_target_size + int(concat) * (embed_inside_size + num_eigenvectors)
 
         self.neo_gnn = neo_gnn
         

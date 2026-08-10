@@ -63,10 +63,11 @@ def get_swap_pairs(channels):
     return swap_pairs
 
 
-def getOrderedChannels(file_name, verbose, labels_object, channel_names):
+def getOrderedChannels(file_name, verbose, labels_object, channel_names, dataset="TUSZ"):
     labels = list(labels_object)
-    for i in range(len(labels)):
-        labels[i] = labels[i].split("-")[0]
+    if dataset == "TUSZ":
+        for i in range(len(labels)):
+            labels[i] = labels[i].split("-")[0]
 
     ordered_channels = []
     for ch in channel_names:
