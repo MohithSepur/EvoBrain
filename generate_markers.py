@@ -17,21 +17,33 @@ def generate_markers(raw_dir, out_dir, clip_len):
             continue
             
         print(f"Scanning {split_dir} for {clip_len}s clips...")
-        edf_files = glob.glob(os.path.join(split_dir, '**', '*.edf'), recursive=True)
         
+        edf_files = []
+        for root, _, files in os.walk(split_dir):
+            for name in files:
+                if name.endswith('.edf'):
+                    edf_files.append(os.path.join(root, name))
+                    
+        print(f"  -> Found {len(edf_files)} .edf files in {split_dir}")
+        
+        missing_anno_count = 0
         for edf in edf_files:
             basename = os.path.basename(edf).replace('.edf', '')
             
-            # Try .tse_bi first (standard for TUSZ v1.5.2), fallback to .tse
+            # Try .tse_bi first (standard for TUSZ v1.5.2), fallback to .tse, then .lbl, then .csv
             tse_bi = edf.replace('.edf', '.tse_bi')
             tse = edf.replace('.edf', '.tse')
+            csv = edf.replace('.edf', '.csv')
             
             anno_file = None
             if os.path.exists(tse_bi):
                 anno_file = tse_bi
             elif os.path.exists(tse):
                 anno_file = tse
+            elif os.path.exists(csv):
+                anno_file = csv
             else:
+                missing_anno_count += 1
                 continue # No annotation file found
             
             seizures = []
@@ -87,7 +99,9 @@ def generate_markers(raw_dir, out_dir, clip_len):
         with open(nosz_file, 'w') as f:
             f.writelines(nosz_lines)
             
-        print(f" -> {split_name}: Generated {len(sz_lines)} seizure clips and {len(nosz_lines)} non-seizure clips.")
+        print(f"  -> {split_name}: Generated {len(sz_lines)} seizure clips and {len(nosz_lines)} non-seizure clips.")
+        if missing_anno_count > 0:
+            print(f"  -> WARNING: {missing_anno_count} EDF files had NO matching annotation file (.tse_bi, .tse, or .csv)!")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Generate Marker Files for TUSZ v1.5.2")
