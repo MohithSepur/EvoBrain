@@ -24,7 +24,21 @@ def read_with_retry(file_name, max_retries=3, retry_delay=1):
     raise Exception(f"All {max_retries} retries failed.")
 
 def process_single_file(edf_fn, save_dir, dataset="TUSZ"):
-    save_fn = os.path.join(save_dir, edf_fn.split("/")[-1].split(".edf")[0] + ".h5")
+    # Determine the split (train, dev, eval) from the EDF path
+    split_folder = ""
+    for s in ["train", "dev", "eval"]:
+        if f"/{s}/" in edf_fn or edf_fn.endswith(f"/{s}"):
+            split_folder = s
+            break
+            
+    # Avoid duplicating the folder name if save_dir already ends with it
+    out_dir = save_dir
+    if split_folder and not save_dir.rstrip('/').endswith(split_folder):
+        out_dir = os.path.join(save_dir, split_folder)
+        
+    os.makedirs(out_dir, exist_ok=True)
+    save_fn = os.path.join(out_dir, edf_fn.split("/")[-1].split(".edf")[0] + ".h5")
+    
     if os.path.exists(save_fn):
         return None  # Skip if already exists
     try:
