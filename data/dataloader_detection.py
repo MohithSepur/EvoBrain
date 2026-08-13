@@ -383,8 +383,20 @@ class SeizureDataset(Dataset):
         if self.preproc_dir is None:
             # TUSZ uses 'eval' for the test set directory name
             split_folder = "eval" if self.split == "test" else self.split
-            resample_sig_dir = os.path.join(
-                self.input_dir, split_folder, h5_fn.split('.edf')[0] + '.h5')
+            base_h5 = h5_fn.split('.edf')[0] + '.h5'
+            
+            # Check nested path first (new resample_signals.py format)
+            nested_path = os.path.join(self.input_dir, split_folder, base_h5)
+            # Check flat path as fallback (old resample_signals.py format)
+            flat_path = os.path.join(self.input_dir, base_h5)
+            
+            if os.path.exists(nested_path):
+                resample_sig_dir = nested_path
+            elif os.path.exists(flat_path):
+                resample_sig_dir = flat_path
+            else:
+                raise FileNotFoundError(f"Could not find {base_h5} in either {nested_path} or {flat_path}")
+                
             eeg_clip, is_seizure = computeSliceMatrix(
                 h5_fn=resample_sig_dir, edf_fn=edf_file, clip_idx=clip_idx,
                 time_step_size=self.time_step_size, clip_len=self.max_seq_len,
