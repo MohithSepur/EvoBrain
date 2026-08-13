@@ -17,15 +17,27 @@ def generate_markers(raw_dir, out_dir, clip_len):
             continue
             
         print(f"Scanning {split_dir} for {clip_len}s clips...")
-        tse_files = glob.glob(os.path.join(split_dir, '**', '*.tse'), recursive=True)
+        edf_files = glob.glob(os.path.join(split_dir, '**', '*.edf'), recursive=True)
         
-        for tse in tse_files:
-            basename = os.path.basename(tse).replace('.tse', '')
+        for edf in edf_files:
+            basename = os.path.basename(edf).replace('.edf', '')
+            
+            # Try .tse_bi first (standard for TUSZ v1.5.2), fallback to .tse
+            tse_bi = edf.replace('.edf', '.tse_bi')
+            tse = edf.replace('.edf', '.tse')
+            
+            anno_file = None
+            if os.path.exists(tse_bi):
+                anno_file = tse_bi
+            elif os.path.exists(tse):
+                anno_file = tse
+            else:
+                continue # No annotation file found
             
             seizures = []
             max_time = 0
             try:
-                with open(tse, 'r') as f:
+                with open(anno_file, 'r') as f:
                     lines = f.readlines()
                     for line in lines:
                         if 'version' in line or not line.strip(): 
