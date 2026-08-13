@@ -229,6 +229,12 @@ class SeizureDataset(Dataset):
         
         print(f"Kept {len(self.file_tuples)} out of {len(raw_tuples)} files after verifying existence in {self.input_dir}")
         self.size = len(self.file_tuples)
+        if self.size == 0:
+            raise ValueError(
+                f"0 files kept after filtering! None of the files in your marker list ({seizure_file} or {nonSeizure_file}) "
+                f"could be found in {self.input_dir} (neither in the root nor in the '{split_folder}' subdirectory). "
+                f"Please ensure you have run resample_signals.py and pointed --input_dir to the correct location."
+            )
 
         # Get sensor ids
         self.sensor_ids = [x.split(' ')[-1] for x in INCLUDED_CHANNELS]
