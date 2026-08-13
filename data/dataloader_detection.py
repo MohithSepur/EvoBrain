@@ -210,13 +210,24 @@ class SeizureDataset(Dataset):
                 f"File marker files for max_seq_len={max_seq_len}s not found in {FILEMARKER_DIR}. "
                 f"Missing: {seizure_file} or {nonSeizure_file}"
             )
-        self.file_tuples = parseTxtFiles(
+        raw_tuples = parseTxtFiles(
             split,
             seizure_file,
             nonSeizure_file,
             cv_seed=seed,
             scale_ratio=sampling_ratio)
 
+        # Filter out files that don't exist (e.g. if they failed resampling)
+        self.file_tuples = []
+        for h5_fn, label in raw_tuples:
+            split_folder = "eval" if split == "test" else split
+            base_h5 = h5_fn.split('.edf')[0] + '.h5'
+            nested_path = os.path.join(self.input_dir, split_folder, base_h5)
+            flat_path = os.path.join(self.input_dir, base_h5)
+            if os.path.exists(nested_path) or os.path.exists(flat_path):
+                self.file_tuples.append([h5_fn, label])
+        
+        print(f"Kept {len(self.file_tuples)} out of {len(raw_tuples)} files after verifying existence in {self.input_dir}")
         self.size = len(self.file_tuples)
 
         # Get sensor ids
