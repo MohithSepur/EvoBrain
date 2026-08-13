@@ -43,22 +43,28 @@ def get_swap_pairs(channels):
         list of tuples, each a pair of channel indices being swapped
     """
     swap_pairs = []
-    if ("EEG FP1" in channels) and ("EEG FP2" in channels):
-        swap_pairs.append((channels.index("EEG FP1"), channels.index("EEG FP2")))
-    if ("EEG Fp1" in channels) and ("EEG Fp2" in channels):
-        swap_pairs.append((channels.index("EEG Fp1"), channels.index("EEG Fp2")))
-    if ("EEG F3" in channels) and ("EEG F4" in channels):
-        swap_pairs.append((channels.index("EEG F3"), channels.index("EEG F4")))
-    if ("EEG F7" in channels) and ("EEG F8" in channels):
-        swap_pairs.append((channels.index("EEG F7"), channels.index("EEG F8")))
-    if ("EEG C3" in channels) and ("EEG C4" in channels):
-        swap_pairs.append((channels.index("EEG C3"), channels.index("EEG C4")))
-    if ("EEG T3" in channels) and ("EEG T4" in channels):
-        swap_pairs.append((channels.index("EEG T3"), channels.index("EEG T4")))
-    if ("EEG T5" in channels) and ("EEG T6" in channels):
-        swap_pairs.append((channels.index("EEG T5"), channels.index("EEG T6")))
-    if ("EEG O1" in channels) and ("EEG O2" in channels):
-        swap_pairs.append((channels.index("EEG O1"), channels.index("EEG O2")))
+    pairs = [
+        ("EEG FP1", "EEG FP2"),
+        ("EEG Fp1", "EEG Fp2"),
+        ("EEG F3", "EEG F4"),
+        ("EEG F7", "EEG F8"),
+        ("EEG C3", "EEG C4"),
+        ("EEG T3", "EEG T4"),
+        ("EEG T5", "EEG T6"),
+        ("EEG O1", "EEG O2"),
+        ("FP1-F7", "FP2-F8"),
+        ("F7-T7", "F8-T8"),
+        ("T7-P7", "T8-P8"),
+        ("P7-O1", "P8-O2"),
+        ("FP1-F3", "FP2-F4"),
+        ("F3-C3", "F4-C4"),
+        ("C3-P3", "C4-P4"),
+        ("P3-O1", "P4-O2")
+    ]
+    
+    for left, right in pairs:
+        if left in channels and right in channels:
+            swap_pairs.append((channels.index(left), channels.index(right)))
 
     return swap_pairs
 
@@ -100,6 +106,46 @@ def getSeizureTimes(file_name):
                         float(line.strip().split(" ")[1]),
                     ]
                 )
+    return seizure_times
+
+
+def getSeizureTimes_CHBMIT(file_name):
+    import re
+    # file_name example: /path/to/raw/.../chb09/chb09_06.edf
+    edf_basename = os.path.basename(file_name)
+    subject = edf_basename.split('_')[0]
+    summary_file = os.path.join(os.path.dirname(file_name), f"{subject}-summary.txt")
+    
+    seizure_times = []
+    if not os.path.exists(summary_file):
+        return seizure_times
+        
+    with open(summary_file, 'r') as f:
+        lines = f.readlines()
+        
+    in_target_file = False
+    current_start = None
+    
+    for line in lines:
+        line = line.strip()
+        if line.startswith("File Name:"):
+            if edf_basename in line:
+                in_target_file = True
+            else:
+                in_target_file = False
+                
+        if in_target_file:
+            # Match "Seizure Start Time: XXX seconds" or "Seizure 1 Start Time: XXX seconds"
+            start_match = re.search(r'Seizure\s+(?:\d+\s+)?Start Time:\s+(\d+)', line)
+            end_match = re.search(r'Seizure\s+(?:\d+\s+)?End Time:\s+(\d+)', line)
+            
+            if start_match:
+                current_start = float(start_match.group(1))
+            elif end_match and current_start is not None:
+                current_end = float(end_match.group(1))
+                seizure_times.append([current_start, current_end])
+                current_start = None
+                
     return seizure_times
 
 
@@ -220,6 +266,8 @@ def comp_xcorr(x, y, mode="valid", normalize=True):
     if normalize and (cxx0 != 0) and (cyy0 != 0):
         scale = (cxx0 * cyy0) ** 0.5
         xcorr /= scale
+    if hasattr(xcorr, 'size') and xcorr.size == 1:
+        return xcorr.item()
     return xcorr
 
 

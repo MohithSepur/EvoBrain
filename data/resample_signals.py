@@ -53,7 +53,7 @@ def process_single_file(edf_fn, save_dir, dataset="TUSZ"):
         print(f"Failed to process {edf_fn}")
         return edf_fn
 
-def resample_all(raw_edf_dir, save_dir, dataset="TUSZ"):
+def resample_all(raw_edf_dir, save_dir, dataset="TUSZ", num_cores=None):
     os.makedirs(save_dir, exist_ok=True)
     edf_files = []
     for path, subdirs, files in os.walk(raw_edf_dir):
@@ -65,7 +65,8 @@ def resample_all(raw_edf_dir, save_dir, dataset="TUSZ"):
     import multiprocessing
     
     failed_files = []
-    num_cores = multiprocessing.cpu_count()
+    if num_cores is None:
+        num_cores = max(1, multiprocessing.cpu_count() // 4)
     print(f"Starting multiprocessing across {num_cores} CPU cores...")
     
     with ProcessPoolExecutor(max_workers=num_cores) as executor:
@@ -101,6 +102,12 @@ if __name__ == "__main__":
         default="TUSZ",
         help="Dataset name: TUSZ or CHBMIT",
     )
+    parser.add_argument(
+        "--num_cores",
+        type=int,
+        default=None,
+        help="Number of cores for multiprocessing",
+    )
     args = parser.parse_args()
 
-    resample_all(args.raw_edf_dir, args.save_dir, args.dataset)
+    resample_all(args.raw_edf_dir, args.save_dir, args.dataset, args.num_cores)

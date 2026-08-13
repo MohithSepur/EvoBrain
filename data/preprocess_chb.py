@@ -3,9 +3,9 @@ import sys
 import argparse
 import h5py
 from tqdm import tqdm
-from dataloader_detection import computeSliceMatrix
+from dataloader_chb import computeSliceMatrix
 
-FILE_MARKER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "file_markers_detection")
+FILE_MARKER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "file_markers_chb")
 
 
 def main(

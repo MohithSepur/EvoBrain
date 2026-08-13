@@ -3,7 +3,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pyedflib
 import utils
-from constants import INCLUDED_CHANNELS, FREQUENCY
+from constants import INCLUDED_CHANNELS, CHBMIT_INCLUDED_CHANNELS, FREQUENCY
 from utils import StandardScaler
 from torch.utils.data import Dataset, DataLoader
 import torch
@@ -17,10 +17,10 @@ import scipy.signal
 from pathlib import Path
 import networkx as nx
 import matplotlib.pyplot as plt
-from data.data_utils import comp_xcorr, keep_topk, computeFFT, getSeizureTimes, get_swap_pairs
+from data.data_utils import comp_xcorr, keep_topk, computeFFT, getSeizureTimes, getSeizureTimes_CHBMIT, get_swap_pairs
 
 repo_paths = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FILEMARKER_DIR = Path(repo_paths).joinpath('data/file_markers_detection')
+FILEMARKER_DIR = Path(repo_paths).joinpath('data/file_markers_chb')
 
 
 def computeSliceMatrix(
@@ -48,7 +48,7 @@ def computeSliceMatrix(
     #assert resampled_freq == FREQUENCY
 
     # get seizure times
-    seizure_times = getSeizureTimes(edf_fn)
+    seizure_times = getSeizureTimes_CHBMIT(edf_fn)
 
     # Iterating through signal
     physical_clip_len = int(FREQUENCY * clip_len)
@@ -220,7 +220,7 @@ class SeizureDataset(Dataset):
         self.size = len(self.file_tuples)
 
         # Get sensor ids
-        self.sensor_ids = [x.split(' ')[-1] for x in INCLUDED_CHANNELS]
+        self.sensor_ids = [x.split(' ')[-1] for x in CHBMIT_INCLUDED_CHANNELS]
 
         targets = []
         for i in range(len(self.file_tuples)):
@@ -478,8 +478,9 @@ class SeizureDataset(Dataset):
             print(f"adj_mat_seq.shape: {adj_mat_seq.shape}")
         return (x, y, seq_len, supports_seq, adj_mat_seq, writeout_fn)
 
-def load_dataset_detection(
-        input_dir,
+def load_dataset_chb(
+        task=None,
+        input_dir=None,
         raw_data_dir,
         train_batch_size,
         test_batch_size=None,
