@@ -381,8 +381,10 @@ class SeizureDataset(Dataset):
 
         # preprocess
         if self.preproc_dir is None:
+            # TUSZ uses 'eval' for the test set directory name
+            split_folder = "eval" if self.split == "test" else self.split
             resample_sig_dir = os.path.join(
-                self.input_dir, h5_fn.split('.edf')[0] + '.h5')
+                self.input_dir, split_folder, h5_fn.split('.edf')[0] + '.h5')
             eeg_clip, is_seizure = computeSliceMatrix(
                 h5_fn=resample_sig_dir, edf_fn=edf_file, clip_idx=clip_idx,
                 time_step_size=self.time_step_size, clip_len=self.max_seq_len,
