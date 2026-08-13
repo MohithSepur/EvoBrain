@@ -74,11 +74,14 @@ def getOrderedChannels(file_name, verbose, labels_object, channel_names, dataset
     if dataset == "TUSZ":
         for i in range(len(labels)):
             labels[i] = labels[i].split("-")[0]
+            
+    # Convert all labels to uppercase for case-insensitive matching
+    labels = [label.upper() for label in labels]
 
     ordered_channels = []
     for ch in channel_names:
         try:
-            ordered_channels.append(labels.index(ch))
+            ordered_channels.append(labels.index(ch.upper()))
         except Exception:
             if verbose:
                 print(file_name + " failed to get channel " + ch)
