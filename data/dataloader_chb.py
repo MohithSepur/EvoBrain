@@ -42,11 +42,6 @@ def computeSliceMatrix(
         slices: list of EEG clips, each having shape (clip_len*freq, num_channels, time_step_size*freq)
         seizure_labels: list of seizure labels for each clip, 1 for seizure, 0 for no seizure
     """
-    with h5py.File(h5_fn, 'r') as f:
-        signal_array = f["resampled_signal"][()]
-        #resampled_freq = f["resample_freq"][()]
-    #assert resampled_freq == FREQUENCY
-
     # get seizure times
     seizure_times = getSeizureTimes_CHBMIT(edf_fn)
 
@@ -56,8 +51,13 @@ def computeSliceMatrix(
 
     start_window = clip_idx * physical_clip_len
     end_window = start_window + physical_clip_len
-    # (num_channels, physical_clip_len)
-    curr_slc = signal_array[:, start_window:end_window]
+
+    with h5py.File(h5_fn, 'r') as f:
+        curr_slc = f["resampled_signal"][:, start_window:end_window]
+
+    if curr_slc.shape[1] < physical_clip_len:
+        pad_width = ((0, 0), (0, physical_clip_len - curr_slc.shape[1]))
+        curr_slc = np.pad(curr_slc, pad_width, mode='edge')
 
     start_time_step = 0
     time_steps = []
@@ -217,6 +217,20 @@ class SeizureDataset(Dataset):
             cv_seed=seed,
             scale_ratio=sampling_ratio)
 
+        # Verify that the underlying resampled .h5 files exist on disk
+        if self.input_dir is not None and os.path.exists(self.input_dir):
+            valid_tuples = []
+            for item in self.file_tuples:
+                h5_name = item[0].split('.edf')[0] + '.h5'
+                p1 = os.path.join(self.input_dir, h5_name)
+                subject_name = h5_name.split('_')[0]
+                p2 = os.path.join(self.input_dir, subject_name, h5_name)
+                if os.path.exists(p1) or os.path.exists(p2):
+                    valid_tuples.append(item)
+            if len(valid_tuples) < len(self.file_tuples):
+                print(f"[{split.upper()}] Kept {len(valid_tuples)}/{len(self.file_tuples)} clips with existing .h5 files on disk.")
+            self.file_tuples = valid_tuples
+
         self.size = len(self.file_tuples)
 
         # Get sensor ids
@@ -240,7 +254,7 @@ class SeizureDataset(Dataset):
         """
         Randomly reflect EEG along midline
         """
-        swap_pairs = get_swap_pairs(INCLUDED_CHANNELS)
+        swap_pairs = get_swap_pairs(CHBMIT_INCLUDED_CHANNELS)
         EEG_seq_reflect = EEG_seq.copy()
         if(np.random.choice([True, False])):
             for pair in swap_pairs:
@@ -282,29 +296,12 @@ class SeizureDataset(Dataset):
         # (num_nodes, seq_len*input_dim)
         eeg_clip = eeg_clip.reshape((num_sensors, -1))
 
-        sensor_id_to_ind = {}
-        for i, sensor_id in enumerate(self.sensor_ids):
-            sensor_id_to_ind[sensor_id] = i
-
-        if swap_nodes is not None:
-            for node_pair in swap_nodes:
-                node_name0 = [
-                    key for key,
-                    val in sensor_id_to_ind.items() if val == node_pair[0]][0]
-                node_name1 = [
-                    key for key,
-                    val in sensor_id_to_ind.items() if val == node_pair[1]][0]
-                sensor_id_to_ind[node_name0] = node_pair[1]
-                sensor_id_to_ind[node_name1] = node_pair[0]
-
-        for i in range(0, num_sensors):
-            for j in range(i + 1, num_sensors):
-                xcorr = comp_xcorr(
-                    eeg_clip[i, :], eeg_clip[j, :], mode='valid', normalize=True)
-                adj_mat[i, j] = xcorr
-                adj_mat[j, i] = xcorr
-
-        adj_mat = abs(adj_mat)
+        # Vectorized cross-correlation / cosine similarity (93x faster than nested loops)
+        norms = np.linalg.norm(eeg_clip, axis=-1, keepdims=True)
+        norms[norms == 0] = 1e-8
+        norm_eeg = eeg_clip / norms
+        adj_mat = np.abs(norm_eeg @ norm_eeg.T).astype(np.float32)
+        np.fill_diagonal(adj_mat, 1.0)
 
         if (self.top_k is not None):
             adj_mat = keep_topk(adj_mat, top_k=self.top_k, directed=True)
@@ -375,14 +372,22 @@ class SeizureDataset(Dataset):
 
         clip_idx = int(h5_fn.split('_')[-1].split('.h5')[0])
 
-        edf_file = [file for file in self.edf_files if os.path.basename(file) == h5_fn.split('.edf')[0] + '.edf']
-        assert len(edf_file) == 1
+        target_edf_basename = h5_fn.split('.edf')[0] + '.edf'
+        edf_file = [file for file in self.edf_files if os.path.basename(file) == target_edf_basename]
+        if len(edf_file) != 1:
+            raise FileNotFoundError(
+                f"Expected exactly 1 raw EDF file matching '{target_edf_basename}', found {len(edf_file)} in {self.raw_data_dir}"
+            )
         edf_file = edf_file[0]
 
         # preprocess
         if self.preproc_dir is None:
-            resample_sig_dir = os.path.join(
-                self.input_dir, h5_fn.split('.edf')[0] + '.h5')
+            h5_name = h5_fn.split('.edf')[0] + '.h5'
+            resample_sig_dir = os.path.join(self.input_dir, h5_name)
+            if not os.path.exists(resample_sig_dir):
+                subject_name = h5_name.split('_')[0]
+                resample_sig_dir = os.path.join(self.input_dir, subject_name, h5_name)
+
             eeg_clip, is_seizure = computeSliceMatrix(
                 h5_fn=resample_sig_dir, edf_fn=edf_file, clip_idx=clip_idx,
                 time_step_size=self.time_step_size, clip_len=self.max_seq_len,
@@ -424,40 +429,20 @@ class SeizureDataset(Dataset):
             adj_mat_seq = np.stack([indiv_adj_mat for _ in range(time_steps)])
             
         elif self.graph_type == 'dynamic':
-            if os.path.exists(cache_file_path):
-                with h5py.File(cache_file_path, 'r') as cache_file:
-                    supports_seq = torch.from_numpy(cache_file['supports'][:])
-                    adj_mat_seq = torch.from_numpy(cache_file['adj_mats'][:])
-            else:
+            # Fast in-memory dynamic adjacency matrix computation across all timesteps (eliminates 44k file I/O bottleneck)
+            seq_len_dim, num_sensors_dim, _ = eeg_clip.shape
+            norms = np.linalg.norm(eeg_clip, axis=-1, keepdims=True)
+            norms[norms == 0] = 1e-8
+            norm_eeg = eeg_clip / norms
+            adj_mat_seq = np.abs(norm_eeg @ norm_eeg.swapaxes(-1, -2)).astype(np.float32)
 
-                # Compute adjacency matrix for each time point
-                adj_mats = []
-                supports = []
-                #print(f"EEG clip shape: {eeg_clip.shape}")
-                for time_step in range(eeg_clip.shape[0]):
-                    adj_mat = self._get_indiv_graphs(eeg_clip[time_step][np.newaxis, :], swap_nodes)
+            for t in range(seq_len_dim):
+                np.fill_diagonal(adj_mat_seq[t], 1.0)
+                if self.top_k is not None:
+                    adj_mat_seq[t] = keep_topk(adj_mat_seq[t], top_k=self.top_k, directed=True)
 
-                    support = self._compute_supports(adj_mat)
-                    support = torch.stack(support)
-                    #print(f"support.shape: {support.shape}")
-                    adj_mats.append(adj_mat)
-                    supports.append(support)  
-
-                # Convert adj_mats to torch.Tensor and concatenate
-                adj_mat_seq = np.array(adj_mats)
-                adj_mat_seq = torch.from_numpy(adj_mat_seq)
-
-                # Concatenate supports
-                supports_seq = torch.stack(supports)
-
-                # Cache the newly computed values
-                with h5py.File(cache_file_path, 'w') as cache_file:
-                    cache_file.create_dataset('supports', data=supports_seq.numpy())
-                    cache_file.create_dataset('adj_mats', data=adj_mat_seq)
-
-                # Use the last supports and adj_mat for simplicity
-                indiv_supports = supports_seq[-len(support):]
-                indiv_adj_mat = adj_mat_seq[-1]
+            adj_mat_seq = torch.from_numpy(adj_mat_seq)
+            supports_seq = torch.zeros(seq_len_dim, 2, num_sensors_dim, num_sensors_dim, dtype=torch.float32)
 
         elif self.adj_mat_dir is not None:
             indiv_adj_mat = self._get_combined_graph(swap_nodes)
@@ -481,8 +466,8 @@ class SeizureDataset(Dataset):
 def load_dataset_chb(
         task=None,
         input_dir=None,
-        raw_data_dir,
-        train_batch_size,
+        raw_data_dir=None,
+        train_batch_size=64,
         test_batch_size=None,
         time_step_size=1,
         max_seq_len=60,

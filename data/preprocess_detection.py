@@ -15,38 +15,18 @@ def main(
         clip_len,
         time_step_size,
         is_fft=True):
-    type = ""
-    with open(os.path.join(
-            FILE_MARKER_DIR, type + "trainSet_seq2seq_" + str(clip_len) + "s_sz.txt"), "r") as f:
-        train_str = f.readlines()
-    train_tuples = [curr_str.strip('\n').split(',') for curr_str in train_str]
-    with open(os.path.join(
-            FILE_MARKER_DIR, type + "trainSet_seq2seq_" + str(clip_len) + "s_nosz.txt"), "r") as f:
-        train_str = f.readlines()
-    train_tuples = train_tuples + \
-        [curr_str.strip('\n').split(',') for curr_str in train_str]
+    # Read all marker files if they exist
+    all_tuples = []
+    for split_name in ["trainSet", "devSet", "testSet"]:
+        for label_type in ["sz", "nosz"]:
+            marker_file = os.path.join(FILE_MARKER_DIR, f"{split_name}_seq2seq_{clip_len}s_{label_type}.txt")
+            if os.path.exists(marker_file):
+                with open(marker_file, "r") as f:
+                    for line in f:
+                        if line.strip():
+                            all_tuples.append(line.strip().split(','))
 
-    with open(os.path.join(
-            FILE_MARKER_DIR, type + "devSet_seq2seq_" + str(clip_len) + "s_sz.txt"), "r") as f:
-        dev_str = f.readlines()
-    dev_tuples = [curr_str.strip('\n').split(',') for curr_str in dev_str]
-    with open(os.path.join(
-            FILE_MARKER_DIR, type + "devSet_seq2seq_" + str(clip_len) + "s_nosz.txt"), "r") as f:
-        dev_str = f.readlines()
-    dev_tuples = dev_tuples + \
-        [curr_str.strip('\n').split(',') for curr_str in dev_str]
-
-    with open(os.path.join(
-            FILE_MARKER_DIR, type + "testSet_seq2seq_" + str(clip_len) + "s_sz.txt"), "r") as f:
-        test_str = f.readlines()
-    test_tuples = [curr_str.strip('\n').split(',') for curr_str in test_str]
-    with open(os.path.join(
-            FILE_MARKER_DIR, type + "testSet_seq2seq_" + str(clip_len) + "s_nosz.txt"), "r") as f:
-        test_str = f.readlines()
-    test_tuples = test_tuples + \
-        [curr_str.strip('\n').split(',') for curr_str in test_str]
-
-    all_tuples = train_tuples + dev_tuples + test_tuples
+    print(f"Loaded {len(all_tuples)} clips to preprocess across splits.")
 
     edf_files = []
     for path, subdirs, files in os.walk(raw_data_dir):
@@ -54,33 +34,49 @@ def main(
             if name.endswith(".edf"):
                 edf_files.append(os.path.join(path, name))
 
+    # Build O(1) lookup dictionary for EDF paths
+    edf_map = {os.path.basename(f): f for f in edf_files}
+    print(f"Indexed {len(edf_map)} raw EDF files.")
+
     output_dir = os.path.join(
         output_dir,
         'clipLen' +
         str(clip_len) +
         '_timeStepSize' +
         str(time_step_size))
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
 
-    delayed_results = []
-    delayed_files = []
     for idx in tqdm(range(len(all_tuples))):
         h5_fn, _ = all_tuples[idx]
-        edf_fn = h5_fn.split('.edf')[0] + '.edf'
-        edf_fn_full = [file for file in edf_files if os.path.basename(file) == h5_fn.split('.edf')[0] + '.edf'][0]
+        target_edf = h5_fn.split('.edf')[0] + '.edf'
+        if target_edf not in edf_map:
+            continue
+        edf_fn_full = edf_map[target_edf]
         clip_idx = int(h5_fn.split('_')[-1].split('.h5')[0])
-        h5_fn = h5_fn.split('.edf')[0] + '.h5'
+        base_h5 = h5_fn.split('.edf')[0] + '.h5'
+
+        # Check flat and nested resampled paths
+        resampled_path = os.path.join(resample_dir, base_h5)
+        if not os.path.exists(resampled_path):
+            for s in ["train", "dev", "eval", "test"]:
+                nested = os.path.join(resample_dir, s, base_h5)
+                if os.path.exists(nested):
+                    resampled_path = nested
+                    break
+
+        if not os.path.exists(resampled_path):
+            continue
 
         eeg_clip, _ = computeSliceMatrix(
-            h5_fn=os.path.join(resample_dir, h5_fn),
+            h5_fn=resampled_path,
             edf_fn=edf_fn_full,
             clip_idx=clip_idx,
             time_step_size=time_step_size,
             clip_len=clip_len,
             is_fft=is_fft)
 
-        with h5py.File(os.path.join(output_dir, edf_fn + '_' + str(clip_idx) + '.h5'), 'w') as hf:
+        out_fn = os.path.join(output_dir, f"{target_edf}_{clip_idx}.h5")
+        with h5py.File(out_fn, 'w') as hf:
             hf.create_dataset('clip', data=eeg_clip)
 
     print("Preprocessing DONE.")

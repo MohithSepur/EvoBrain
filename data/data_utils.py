@@ -69,23 +69,69 @@ def get_swap_pairs(channels):
     return swap_pairs
 
 
+MODERN_CHANNEL_ALIASES = {
+    'EEG T3': 'EEG T7',
+    'EEG T4': 'EEG T8',
+    'EEG T5': 'EEG P7',
+    'EEG T6': 'EEG P8',
+    'EEG T7': 'EEG T3',
+    'EEG T8': 'EEG T4',
+    'EEG P7': 'EEG T5',
+    'EEG P8': 'EEG T6',
+    'T3': 'T7',
+    'T4': 'T8',
+    'T5': 'P7',
+    'T6': 'P8',
+    'T7': 'T3',
+    'T8': 'T4',
+    'P7': 'T5',
+    'P8': 'T6',
+    'F7-T3': 'F7-T7',
+    'F7-T7': 'F7-T3',
+    'T3-T5': 'T7-P7',
+    'T7-P7': 'T3-T5',
+    'T5-O1': 'P7-O1',
+    'P7-O1': 'T5-O1',
+    'F8-T4': 'F8-T8',
+    'F8-T8': 'F8-T4',
+    'T4-T6': 'T8-P8',
+    'T8-P8': 'T4-T6',
+    'T6-O2': 'P8-O2',
+    'P8-O2': 'T6-O2',
+}
+
 def getOrderedChannels(file_name, verbose, labels_object, channel_names, dataset="TUSZ"):
-    labels = list(labels_object)
+    raw_labels = list(labels_object)
+    
     if dataset == "TUSZ":
-        for i in range(len(labels)):
-            labels[i] = labels[i].split("-")[0]
-            
-    # Convert all labels to uppercase for case-insensitive matching
-    labels = [label.upper() for label in labels]
+        labels = [l.split("-")[0].strip().upper() for l in raw_labels]
+    elif dataset in ["CHBMIT", "CHB"]:
+        labels = []
+        for l in raw_labels:
+            clean_l = l.upper().replace('EEG ', '').replace('EEG', '').strip().rstrip('.').replace(' ', '')
+            if clean_l.endswith('-0') or clean_l.endswith('-1'):
+                clean_l = clean_l[:-2]
+            labels.append(clean_l)
+    else:
+        labels = [l.upper().strip() for l in raw_labels]
 
     ordered_channels = []
     for ch in channel_names:
-        try:
+        ch_clean = ch.upper().replace('EEG ', '').replace('EEG', '').strip().rstrip('.').replace(' ', '')
+        if ch_clean in labels:
+            ordered_channels.append(labels.index(ch_clean))
+        elif ch.upper() in labels:
             ordered_channels.append(labels.index(ch.upper()))
-        except Exception:
-            if verbose:
-                print(file_name + " failed to get channel " + ch)
-            raise Exception("channel not match")
+        else:
+            # Try standard 10-20 modern alias
+            alias = MODERN_CHANNEL_ALIASES.get(ch, "") or MODERN_CHANNEL_ALIASES.get(ch_clean, "")
+            alias_clean = alias.upper().replace('EEG ', '').replace('EEG', '').strip().rstrip('.').replace(' ', '')
+            if alias_clean and alias_clean in labels:
+                ordered_channels.append(labels.index(alias_clean))
+            else:
+                if verbose:
+                    print(file_name + " failed to get channel " + ch)
+                raise Exception("channel not match")
     return ordered_channels
 
 
@@ -96,19 +142,50 @@ def getSeizureTimes(file_name):
     Returns:
         seizure_times: list of times of seizure onset in seconds
     """
-    tse_file = file_name.split(".edf")[0] + ".tse_bi"
+    tse_bi = file_name.split(".edf")[0] + ".tse_bi"
+    csv_bi = file_name.split(".edf")[0] + ".csv_bi"
+    tse = file_name.split(".edf")[0] + ".tse"
+    csv = file_name.split(".edf")[0] + ".csv"
+
+    anno_file = None
+    if os.path.exists(tse_bi):
+        anno_file = tse_bi
+    elif os.path.exists(csv_bi):
+        anno_file = csv_bi
+    elif os.path.exists(tse):
+        anno_file = tse
+    elif os.path.exists(csv):
+        anno_file = csv
 
     seizure_times = []
-    with open(tse_file) as f:
-        for line in f.readlines():
-            if "seiz" in line:  # if seizure
-                # seizure start and end time
-                seizure_times.append(
-                    [
-                        float(line.strip().split(" ")[0]),
-                        float(line.strip().split(" ")[1]),
-                    ]
-                )
+    if anno_file is None:
+        return seizure_times
+
+    with open(anno_file, 'r') as f:
+        lines = f.readlines()
+        for line in lines:
+            if 'version' in line or line.startswith("#") or not line.strip() or 'start_time' in line:
+                continue
+            parts = line.strip().replace(',', ' ').split()
+            if len(parts) >= 4 and parts[0].upper() == "TERM":
+                try:
+                    start, end, label = float(parts[1]), float(parts[2]), parts[3]
+                    if label.lower() != 'bckg' or 'seiz' in label.lower():
+                        seizure_times.append([start, end])
+                except ValueError:
+                    pass
+            elif len(parts) >= 3:
+                try:
+                    start, end, label = float(parts[0]), float(parts[1]), parts[2]
+                    if label.lower() != 'bckg' or 'seiz' in line.lower():
+                        seizure_times.append([start, end])
+                except ValueError:
+                    pass
+            elif len(parts) >= 2 and any(k in line.lower() for k in ["seiz", "fnsz", "gnsz", "cpsz", "spsz", "tcsz"]):
+                try:
+                    seizure_times.append([float(parts[0]), float(parts[1])])
+                except ValueError:
+                    pass
     return seizure_times
 
 
@@ -117,13 +194,16 @@ def getSeizureTimes_CHBMIT(file_name):
     # file_name example: /path/to/raw/.../chb09/chb09_06.edf
     edf_basename = os.path.basename(file_name)
     subject = edf_basename.split('_')[0]
-    summary_file = os.path.join(os.path.dirname(file_name), f"{subject}-summary.txt")
     
+    summary_file = os.path.join(os.path.dirname(file_name), f"{subject}-summary.txt")
+    if not os.path.exists(summary_file):
+        summary_file = os.path.join(os.path.dirname(file_name), f"{subject.lower()}-summary.txt")
+        
     seizure_times = []
     if not os.path.exists(summary_file):
         return seizure_times
         
-    with open(summary_file, 'r') as f:
+    with open(summary_file, 'r', encoding='utf-8', errors='ignore') as f:
         lines = f.readlines()
         
     in_target_file = False
@@ -136,11 +216,11 @@ def getSeizureTimes_CHBMIT(file_name):
                 in_target_file = True
             else:
                 in_target_file = False
+                current_start = None
                 
         if in_target_file:
-            # Match "Seizure Start Time: XXX seconds" or "Seizure 1 Start Time: XXX seconds"
-            start_match = re.search(r'Seizure\s+(?:\d+\s+)?Start Time:\s+(\d+)', line)
-            end_match = re.search(r'Seizure\s+(?:\d+\s+)?End Time:\s+(\d+)', line)
+            start_match = re.search(r'Seizure\s*(?:\d+\s*)?Start\s*Time:\s*(\d+)', line, re.IGNORECASE)
+            end_match = re.search(r'Seizure\s*(?:\d+\s*)?End\s*Time:\s*(\d+)', line, re.IGNORECASE)
             
             if start_match:
                 current_start = float(start_match.group(1))
@@ -196,7 +276,7 @@ def getEDFsignals(edf):
     """
     n = edf.signals_in_file
     samples = edf.getNSamples()[0]
-    signals = np.zeros((n, samples))
+    signals = np.zeros((n, samples), dtype=np.float32)
     for i in range(n):
         try:
             signals[i, :] = edf.readSignal(i)
@@ -205,19 +285,51 @@ def getEDFsignals(edf):
     return signals
 
 
-def resampleData(signals, to_freq=200, window_size=4):
+def resampleData(signals, to_freq=200, window_size=None, orig_freq=None):
     """
     Resample signals from its original sampling freq to another freq
     Args:
         signals: EEG signal slice, (num_channels, num_data_points)
         to_freq: Re-sampled frequency in Hz
-        window_size: time window in seconds
+        window_size: time window in seconds (optional)
+        orig_freq: original frequency in Hz (optional)
     Returns:
         resampled: (num_channels, resampled_data_points)
     """
-    num = int(to_freq * window_size)
-    resampled = resample(signals, num=num, axis=1)
-    return resampled
+    from math import gcd
+    from scipy.signal import resample_poly, resample
+
+    num_samples = signals.shape[1]
+    if orig_freq is None:
+        if window_size is not None and window_size > 0:
+            orig_freq = int(round(num_samples / window_size))
+        else:
+            orig_freq = 256  # default fallback
+
+    if int(orig_freq) == int(to_freq):
+        return signals
+
+    try:
+        g = gcd(int(to_freq), int(orig_freq))
+        up = int(to_freq) // g
+        down = int(orig_freq) // g
+        resampled = resample_poly(signals, up, down, axis=-1)
+
+        if window_size is not None:
+            target_num = int(to_freq * window_size)
+            if resampled.shape[-1] > target_num:
+                resampled = resampled[..., :target_num]
+            elif resampled.shape[-1] < target_num:
+                pad_width = [(0, 0)] * (resampled.ndim - 1) + [(0, target_num - resampled.shape[-1])]
+                resampled = np.pad(resampled, pad_width, mode='edge')
+        return resampled
+    except Exception:
+        # Fallback to Fourier-based resample
+        if window_size is not None:
+            num = int(to_freq * window_size)
+        else:
+            num = int(num_samples * (to_freq / orig_freq))
+        return resample(signals, num=num, axis=-1)
 
 
 ######## Graph related data utils ########

@@ -8,7 +8,7 @@ def get_args():
     parser.add_argument('--dataset',
                         type=str,
                         default="TUSZ",
-                        choices=("TUSZ", "CHBMIT"),
+                        choices=("TUSZ", "CHBMIT", "CHB-MIT"),
                         help='Dataset to use.')
     parser.add_argument('--device',
                         type=str,
@@ -27,6 +27,10 @@ def get_args():
                         default=False,
                         action='store_true',
                         help='Whether perform training.')
+    parser.add_argument('--debug_anomaly',
+                        default=False,
+                        action='store_true',
+                        help='Whether to enable PyTorch autograd anomaly detection for debugging NaNs.')
     parser.add_argument('--rand_seed',
                         type=int,
                         default=123,

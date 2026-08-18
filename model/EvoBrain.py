@@ -646,7 +646,7 @@ class EvoBrain(nn.Module):
 
         # Add Laplacian Eigenvector PE
         if num_eigenvectors > 0:
-            self.laplacian_pe = AddLaplacianEigenvectorPE(k=num_eigenvectors)
+            self.laplacian_pe = AddLaplacianEigenvectorPE(k=num_eigenvectors, is_undirected=True)
         self.num_eigenvectors = num_eigenvectors
 
         self.reduce_edge = reduce_edge
@@ -744,8 +744,19 @@ class EvoBrain(nn.Module):
             )
 
             if self.num_eigenvectors > 0:
-                data = self.laplacian_pe(data.detach())
-                pe = data.laplacian_eigenvector_pe.to(device)
+                try:
+                    data_pe = self.laplacian_pe(data.detach())
+                    pe = data_pe.laplacian_eigenvector_pe.to(device)
+                except Exception:
+                    from torch_geometric.utils import get_laplacian, to_dense_adj
+                    num_n = node_last[i].shape[0]
+                    L_idx, L_w = get_laplacian(edge_tuples, ew.squeeze(-1), normalization="sym", num_nodes=num_n)
+                    L_dense = to_dense_adj(L_idx, max_num_nodes=num_n, edge_attr=L_w).squeeze(0)
+                    _, eig_vecs = torch.linalg.eigh(L_dense)
+                    pe = eig_vecs[:, :self.num_eigenvectors]
+                    if pe.shape[1] < self.num_eigenvectors:
+                        pad = torch.zeros(num_n, self.num_eigenvectors - pe.shape[1], device=device, dtype=pe.dtype)
+                        pe = torch.cat([pe, pad], dim=-1)
                 x_i = torch.cat([node_last[i], pe], dim=-1)
             else:
                 x_i = node_last[i]

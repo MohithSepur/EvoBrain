@@ -6,7 +6,7 @@ licensed under the MIT License.
 
 from contextlib import contextmanager
 from sklearn.metrics import precision_recall_curve, accuracy_score, roc_auc_score
-from sklearn.metrics import f1_score, recall_score, precision_score
+from sklearn.metrics import f1_score, recall_score, precision_score, confusion_matrix
 from collections import OrderedDict, defaultdict
 from itertools import repeat
 from datetime import datetime
@@ -57,20 +57,26 @@ def seed_torch(seed=123):
     torch.backends.cudnn.deterministic = True
 
 
-def get_save_dir(base_dir, training, id_max=500):
+def get_save_dir(base_dir, dataset, task, max_len, model, graph, seed, id_max=500):
     """Get a unique save directory by appending the smallest positive integer
     `id < id_max` that is not already taken (i.e., no dir exists with that id).
+    
     Args:
         base_dir (str): Base directory in which to make save directories.
-        training (bool): Save dir. is for training (determines subdirectory).
+        task (str): Task name for the directory structure.
+        model (str): Model name for the directory structure.
+        graph (str): Graph name for the directory structure.
+        seed (int): Seed value for the directory structure.
         id_max (int): Maximum ID number before raising an exception.
+        
     Returns:
         save_dir (str): Path to a new directory with a unique name.
     """
     for uid in range(1, id_max):
-        subdir = 'train' if training else 'test'
+        # Directory name format: task_model_graph_seed_uid
         save_dir = os.path.join(
-            base_dir, subdir, '{}-{:02d}'.format(subdir, uid))
+            base_dir, '{}/{}/{}/{}_{}_{}_{}'.format(dataset, task, max_len, model, graph, seed, '{:02d}'.format(uid))
+        )
         if not os.path.exists(save_dir):
             os.makedirs(save_dir)
             return save_dir
@@ -311,9 +317,20 @@ def eval_dict(y_pred, y, y_prob=None, file_names=None, average='macro'):
             y_true=y, y_pred=y_pred, average=average)
         scores_dict['recall'] = recall_score(
             y_true=y, y_pred=y_pred, average=average)
-        if y_prob is not None:
-            if len(set(y)) <= 2:  # binary case
-                scores_dict['auroc'] = roc_auc_score(y_true=y, y_score=y_prob)
+        
+        if len(set(y)) <= 2:
+            # confusion_matrix を使用して特異度(specificity)を計算
+            cm_res = confusion_matrix(y_true=y, y_pred=y_pred, labels=[0, 1])
+            tn, fp, fn, tp = cm_res.ravel()
+            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0  # ゼロ除算の回避
+            scores_dict['specificity'] = specificity
+
+            # y_prob が与えられている場合は AUROC を計算
+            if y_prob is not None and len(set(y)) > 1:
+                try:
+                    scores_dict['auroc'] = roc_auc_score(y_true=y, y_score=y_prob)
+                except ValueError:
+                    pass
 
     return scores_dict, pred_dict, true_dict
 
@@ -331,11 +348,13 @@ def thresh_max_f1(y_true, y_prob):
     fscore = []
     n_thresh = len(thresholds)
     for idx in range(n_thresh):
-        curr_f1 = (2 * precision[idx] * recall[idx]) / \
-            (precision[idx] + recall[idx])
+        denom = precision[idx] + recall[idx]
+        curr_f1 = (2 * precision[idx] * recall[idx]) / denom if denom > 0 else 0.0
         if not (np.isnan(curr_f1)):
             fscore.append(curr_f1)
             thresh_filt.append(thresholds[idx])
+    if len(fscore) == 0:
+        return 0.5
     # locate the index of the largest f score
     ix = np.argmax(np.array(fscore))
     best_thresh = thresh_filt[ix]
@@ -378,7 +397,7 @@ def build_sparse_matrix(L):
     shape = L.shape
     i = torch.LongTensor(np.vstack((L.row, L.col)).astype(int))
     v = torch.FloatTensor(L.data)
-    return torch.sparse.FloatTensor(i, v, torch.Size(shape))
+    return torch.sparse_coo_tensor(i, v, torch.Size(shape))
 
 
 def compute_sampling_threshold(cl_decay_steps, global_step):
@@ -410,9 +429,10 @@ class StandardScaler:
             device: device
             mask: shape (batch_size,) nodes where some signals are masked
         """
-        mean = self.mean.copy()
-        std = self.std.copy()
-        if len(mean.shape) == 0:
+        import copy
+        mean = self.mean.copy() if hasattr(self.mean, 'copy') else copy.deepcopy(self.mean)
+        std = self.std.copy() if hasattr(self.std, 'copy') else copy.deepcopy(self.std)
+        if not hasattr(mean, 'shape') or len(mean.shape) == 0:
             mean = [mean]
             std = [std]
         if is_tensor:
@@ -492,3 +512,10 @@ def compute_regression_loss(
         return masked_mae_loss(y_predicted, y_true, mask_val=mask_val)
     else:
         return masked_mse_loss(y_predicted, y_true, mask_val=mask_val)
+
+class Namespace(object):
+    '''
+    helps referencing object in a dictionary as dict.key instead of dict['key']
+    '''
+    def __init__(self, adict):
+        self.__dict__.update(adict)

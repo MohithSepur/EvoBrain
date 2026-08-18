@@ -26,9 +26,10 @@ import copy
 import pandas as pd
 import sklearn
 import time
-torch.autograd.set_detect_anomaly(True)
 
 def main(args):
+    if getattr(args, "debug_anomaly", False):
+        torch.autograd.set_detect_anomaly(True)
 
     # Get device
     args.cuda = torch.cuda.is_available()
@@ -55,8 +56,10 @@ def main(args):
 
     # Build dataset
     log.info('Building dataset...')
-    if args.dataset == 'CHBMIT':
-        print("Loading CHBMIT dataset...")
+    if args.dataset in ['CHBMIT', 'CHB-MIT']:
+        if args.num_nodes == 19:
+            args.num_nodes = 18
+        print("Loading CHB-MIT dataset...")
         from data.dataloader_chb import load_dataset_chb
         dataloaders, datasets, scaler = load_dataset_chb(
             task = args.task,
@@ -421,6 +424,7 @@ def evaluate(
     file_name_all = []
     hidden_all = []
     time_list = []
+    loss_meter = utils.AverageMeter()
     with torch.no_grad(), tqdm(total=len(dataloader.dataset)) as progress_bar:
         for x, y, seq_lengths, supports, adj, file_name in dataloader:
             batch_size = x.shape[0]
@@ -467,6 +471,7 @@ def evaluate(
             # Update loss
             target = y.long() if isinstance(loss_fn, nn.CrossEntropyLoss) else y.float()
             loss = loss_fn(logits, target)
+            loss_meter.update(loss.item(), batch_size)
             if nll_meter is not None:
                 nll_meter.update(loss.item(), batch_size)
 
@@ -474,7 +479,8 @@ def evaluate(
             y_true_all.append(y_true)
             y_prob_all.append(y_prob)
             file_name_all.extend(file_name)
-            hidden_all.append(hidden.cpu().reshape(hidden.shape[0], -1))
+            if is_test and eval_set == 'test':
+                hidden_all.append(hidden.cpu().reshape(hidden.shape[0], -1))
 
             # Log info
             progress_bar.update(batch_size)
@@ -484,11 +490,12 @@ def evaluate(
     y_pred_all = np.concatenate(y_pred_all, axis=0)
     y_true_all = np.concatenate(y_true_all, axis=0)
     y_prob_all = np.concatenate(y_prob_all, axis=0)
-    hidden_all = np.concatenate(hidden_all, axis=0)
-    # print("Hidden shape:", hidden_all.shape)
-    # print("y_pred_all shape:", y_pred_all.shape)
+    if is_test and eval_set == 'test' and len(hidden_all) > 0:
+        hidden_all = np.concatenate(hidden_all, axis=0)
+    else:
+        hidden_all = None
 
-    # 評価結果をファイルに保存
+    # Save evaluation results to file
     if is_test:
         results_file = os.path.join(save_dir, f'{eval_set}_results.npz')
         np.savez(results_file, 
@@ -498,26 +505,19 @@ def evaluate(
                  file_names=file_name_all)
         print(f"Evaluation results saved to {results_file}")
 
-    if eval_set=='test':
-            output_file = os.path.join(save_dir, "hidden.csv")
-            os.makedirs(os.path.dirname(output_file), exist_ok=True)
-            
-            # Convert tensor to DataFrame
-            df = pd.DataFrame(hidden_all)
-            
-            df.to_csv(output_file, mode='w', header=False, index=False)
+    if is_test and eval_set == 'test' and hidden_all is not None:
+        output_file = os.path.join(save_dir, "hidden.csv")
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        df = pd.DataFrame(hidden_all)
+        df.to_csv(output_file, mode='w', header=False, index=False)
 
-            output_file = os.path.join(save_dir, "true_labels.csv")
-            os.makedirs(os.path.dirname(output_file), exist_ok=True)
-            
-            # Convert tensor to DataFrame
-            df = pd.DataFrame(np.expand_dims(y_true_all, axis=0))
-            
-            df.to_csv(output_file, mode='w', header=False, index=False)
+        output_file = os.path.join(save_dir, "true_labels.csv")
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
+        df = pd.DataFrame(np.expand_dims(y_true_all, axis=0))
+        df.to_csv(output_file, mode='w', header=False, index=False)
     
     avg_time_per_batch = np.mean(time_list)
     log.info(f"Average Test Time per Batch: {avg_time_per_batch:.4f} seconds")
-
 
     # Threshold search, for detection only
     if ((args.task == "detection") or (args.task == "prediction")) and (eval_set == 'dev') and is_test:
@@ -537,7 +537,7 @@ def evaluate(
         np.savez(roc_file, fpr=fpr, tpr=tpr, thresholds=thresholds)
         print(f"ROC curve data saved to {roc_file}")
 
-    eval_loss = nll_meter.avg if (nll_meter is not None) else loss.item()
+    eval_loss = (nll_meter.avg if nll_meter is not None else (loss_meter.avg if 'loss_meter' in locals() else loss.item()))
     results_list = [('loss', eval_loss),
                     ('acc', scores_dict['acc']),
                     ('F1', scores_dict['F1']),
@@ -549,10 +549,6 @@ def evaluate(
     results = OrderedDict(results_list)
 
     return results
-
-def check_tensor(data, description):
-    if not isinstance(data, torch.Tensor):
-        raise TypeError(f"{description} is not a tensor! Found type: {type(data)}")
 
 
 if __name__ == '__main__':
