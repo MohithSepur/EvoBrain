@@ -205,3 +205,32 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# macOS metadata
+.DS_Store
+*.DS_Store
+
+# Windows / WSL metadata
+*:Zone.Identifier
+
+# EvoBrain Experiments, Checkpoints & Outputs
+result/
+results/
+graph_cache/
+EvoBrain-main/
+*.h5
+*.pth.tar
+*.npz
+*.tfevents.*
+events.out.tfevents.*
+
+# Datasets & Resampled Signals
+data/raw/
+data/resampled/
+.data/
+
+# Local Debug Scripts & Logs
+inspect_env.py
+list_of_all_the_failed_files.txt
+1000047270.jpg
+
