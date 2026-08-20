@@ -351,12 +351,31 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
                     logits = logits.view(-1)          
                 target = y.long() if isinstance(loss_fn, nn.CrossEntropyLoss) else y.float()
                 loss = loss_fn(logits, target)
+
+                # Skip step if loss is non-finite to prevent corrupting model weights
+                if not torch.isfinite(loss):
+                    optimizer.zero_grad()
+                    progress_bar.update(batch_size)
+                    continue
+
                 loss_val = loss.item()
 
                 # Backward
                 loss.backward()
-                nn.utils.clip_grad_norm_(
-                    model.parameters(), args.max_grad_norm)
+
+                # Clip gradients and verify they are finite
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                grad_is_finite = True
+                for p in model.parameters():
+                    if p.grad is not None and not torch.isfinite(p.grad).all():
+                        grad_is_finite = False
+                        break
+
+                if not grad_is_finite:
+                    optimizer.zero_grad()
+                    progress_bar.update(batch_size)
+                    continue
+
                 optimizer.step()
 
                 end_time = time.time()

@@ -256,6 +256,12 @@ class PklSeizureDataset(Dataset):
         if self.standardize and self.scaler is not None:
             curr_feature = self.scaler.transform(curr_feature)
             curr_feature = np.nan_to_num(curr_feature, nan=0.0, posinf=0.0, neginf=0.0)
+        else:
+            feat_mean = np.mean(curr_feature)
+            feat_std = np.std(curr_feature)
+            if feat_std > 1e-5:
+                curr_feature = (curr_feature - feat_mean) / feat_std
+            curr_feature = np.nan_to_num(curr_feature, nan=0.0, posinf=0.0, neginf=0.0)
 
         x = torch.FloatTensor(curr_feature)
         y = torch.FloatTensor([seizure_label])
