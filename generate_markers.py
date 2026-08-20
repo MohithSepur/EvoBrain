@@ -306,7 +306,7 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default="CHB-MIT", choices=["TUSZ", "CHBMIT", "CHB-MIT"], help="Dataset name")
     parser.add_argument("--raw_data_dir", type=str, required=True, help="Path to raw edf directory")
     parser.add_argument("--out_dir", type=str, default=None, help="Output directory for marker files")
-    parser.add_argument("--clip_lens", nargs="+", type=int, default=[12, 60], help="Clip lengths in seconds (default: 12 60)")
+    parser.add_argument("--clip_lens", nargs="+", type=int, default=[10, 12, 60], help="Clip lengths in seconds (default: 10 12 60)")
     parser.add_argument("--split_mode", type=str, default="patient_15", choices=["patient_15", "subject_holdout"], help="Split mode for CHB-MIT: patient_15 (Track A) or subject_holdout (Track B)")
     parser.add_argument("--seed", type=int, default=123, help="Random seed for reproducible patient split")
     

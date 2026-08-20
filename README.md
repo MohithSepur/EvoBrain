@@ -70,16 +70,16 @@ Convert raw `.edf` recordings into 200 Hz `.h5` files:
 ---
 
 ### Step 2: Generate Dataset Markers & Splits
-Extract seizure/non-seizure window markers (12s and 60s windows):
+Extract seizure/non-seizure window markers (10s, 12s, and 60s windows):
 
 * **For TUSZ:**
   ```bash
-  python generate_markers.py --dataset TUSZ --raw_data_dir ./data/raw/TUSZ
+  python generate_markers.py --dataset TUSZ --raw_data_dir ./data/raw/TUSZ --clip_lens 10 12 60
   ```
 
 * **For CHB-MIT:**
   ```bash
-  python generate_markers.py --dataset CHBMIT --raw_data_dir ./data/raw/CHB-MIT --split_mode patient
+  python generate_markers.py --dataset CHBMIT --raw_data_dir ./data/raw/CHB-MIT --clip_lens 10 12 60 --split_mode patient_15
   ```
 
 Marker text files will be stored in `data/file_markers_detection/` (TUSZ) or `data/file_markers_chb/` (CHB-MIT).

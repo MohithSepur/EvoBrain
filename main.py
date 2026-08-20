@@ -54,6 +54,33 @@ def main(args):
     if args.model_name == "BIOT":
         args.use_fft = False
 
+    # Auto-resolve input_dir and raw_data_dir if default paths do not exist
+    if not os.path.exists(args.input_dir) or args.input_dir == "./resampled":
+        dataset_name = "CHB-MIT" if args.dataset in ["CHBMIT", "CHB-MIT"] else "TUSZ"
+        candidates = [
+            os.path.join("./data/resampled", dataset_name),
+            "./data/resampled",
+            os.path.join("./resampled", dataset_name),
+            "./resampled",
+        ]
+        for c in candidates:
+            if os.path.exists(c):
+                args.input_dir = c
+                break
+
+    if not os.path.exists(args.raw_data_dir) or args.raw_data_dir == "./TUSZ":
+        dataset_name = "CHB-MIT" if args.dataset in ["CHBMIT", "CHB-MIT"] else "TUSZ"
+        candidates = [
+            os.path.join("./data/raw", dataset_name),
+            "./data/raw",
+            os.path.join("./raw", dataset_name),
+            "./TUSZ",
+        ]
+        for c in candidates:
+            if os.path.exists(c):
+                args.raw_data_dir = c
+                break
+
     # Build dataset
     log.info('Building dataset...')
     if args.dataset in ['CHBMIT', 'CHB-MIT']:

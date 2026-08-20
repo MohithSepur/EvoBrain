@@ -122,7 +122,7 @@ if __name__ == "__main__":
     parser.add_argument("--resampled_dir", type=str, required=True, help="Path to resampled h5 directory")
     parser.add_argument("--raw_data_dir", type=str, required=True, help="Path to raw edf directory")
     parser.add_argument("--marker_dir", type=str, default=None, help="Path to marker file directory")
-    parser.add_argument("--clip_lens", nargs="+", type=int, default=[12, 60], help="Clip lengths in seconds")
+    parser.add_argument("--clip_lens", nargs="+", type=int, default=[10, 12, 60], help="Clip lengths in seconds")
     parser.add_argument("--max_samples", type=int, default=3000, help="Number of training clips to sample for statistics")
     
     args = parser.parse_args()
