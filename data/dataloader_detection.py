@@ -524,6 +524,7 @@ def load_dataset_detection(
         raise NotImplementedError
 
     # load mean and std
+    scaler = None
     if standardize:
         means_dir = os.path.join(
             FILEMARKER_DIR,
@@ -535,14 +536,26 @@ def load_dataset_detection(
             'stds_seq2seq_fft_' +
             str(max_seq_len) +
             's_szdetect_single.pkl')
-        with open(means_dir, 'rb') as f:
-            means = pickle.load(f)
-        with open(stds_dir, 'rb') as f:
-            stds = pickle.load(f)
 
-        scaler = StandardScaler(mean=means, std=stds)
-    else:
-        scaler = None
+        if not (os.path.exists(means_dir) and os.path.exists(stds_dir)):
+            # Fallback to 12s or any available scaler in FILEMARKER_DIR
+            fallback_means = os.path.join(FILEMARKER_DIR, 'means_seq2seq_fft_12s_szdetect_single.pkl')
+            fallback_stds = os.path.join(FILEMARKER_DIR, 'stds_seq2seq_fft_12s_szdetect_single.pkl')
+            if os.path.exists(fallback_means) and os.path.exists(fallback_stds):
+                print(f"Notice: {means_dir} not found. Reusing 12s scaler ({fallback_means}) since 1-second FFT scales are identical.")
+                means_dir = fallback_means
+                stds_dir = fallback_stds
+            else:
+                print(f"Warning: No scaler file found in {FILEMARKER_DIR}. Proceeding without standardization.")
+                means_dir = None
+                stds_dir = None
+
+        if means_dir and stds_dir and os.path.exists(means_dir) and os.path.exists(stds_dir):
+            with open(means_dir, 'rb') as f:
+                means = pickle.load(f)
+            with open(stds_dir, 'rb') as f:
+                stds = pickle.load(f)
+            scaler = StandardScaler(mean=means, std=stds)
 
     dataloaders = {}
     datasets = {}

@@ -49,11 +49,26 @@ def compute_dataset_scaler(dataset, resampled_dir, raw_data_dir, marker_dir, cli
             if f.endswith('.edf'):
                 edf_map[f] = os.path.join(root, f)
                 
+    # Index all resampled H5 files for fast lookup across all subdirectories (train, dev, eval, subject dirs)
+    h5_map = {}
+    for root, _, files in os.walk(resampled_dir):
+        for f in files:
+            if f.endswith('.h5'):
+                h5_map[f] = os.path.join(root, f)
+                
+    print(f"Indexed {len(edf_map)} raw .edf files from {raw_data_dir}")
+    print(f"Indexed {len(h5_map)} resampled .h5 files from {resampled_dir}")
+    if len(h5_map) == 0:
+        raise FileNotFoundError(f"Found 0 .h5 files in {resampled_dir}! Please ensure your --resampled_dir path is correct.")
+    if len(edf_map) == 0:
+        raise FileNotFoundError(f"Found 0 .edf files in {raw_data_dir}! Please ensure your --raw_data_dir path is correct.")
+        
     # Running accumulation
     sum_vals = 0.0
     sum_sq_vals = 0.0
     total_count = 0
     
+    first_error_logged = False
     successful_clips = 0
     for line in tqdm(lines, desc=f"Computing scaler ({dataset} {clip_len}s)"):
         line = line.strip()
@@ -68,12 +83,8 @@ def compute_dataset_scaler(dataset, resampled_dir, raw_data_dir, marker_dir, cli
         edf_full_path = edf_map[edf_name]
         
         base_h5 = h5_fn.split('.edf')[0] + '.h5'
-        h5_path = os.path.join(resampled_dir, base_h5)
-        if not os.path.exists(h5_path):
-            subject_name = base_h5.split('_')[0]
-            h5_path = os.path.join(resampled_dir, subject_name, base_h5)
-            
-        if not os.path.exists(h5_path):
+        h5_path = h5_map.get(base_h5, None)
+        if h5_path is None or not os.path.exists(h5_path):
             continue
             
         try:
@@ -90,11 +101,18 @@ def compute_dataset_scaler(dataset, resampled_dir, raw_data_dir, marker_dir, cli
             sum_sq_vals += np.sum(np.square(eeg_clip))
             total_count += eeg_clip.size
             successful_clips += 1
-        except Exception:
+        except Exception as e:
+            if not first_error_logged:
+                print(f"\n[Debug] Error reading clip {base_h5} (idx {clip_idx}): {e}")
+                first_error_logged = True
             continue
             
     if total_count == 0 or successful_clips == 0:
-        raise RuntimeError("Failed to read any valid resampled clips to compute scaler!")
+        raise RuntimeError(
+            f"Failed to read any valid resampled clips to compute scaler! "
+            f"Verified {len(h5_map)} .h5 files and {len(edf_map)} .edf files. "
+            f"Please check that the filenames in your marker files match the .h5 files."
+        )
         
     mean = sum_vals / total_count
     var = (sum_sq_vals / total_count) - (mean ** 2)
