@@ -203,9 +203,14 @@ class PklSeizureDataset(Dataset):
         # We need to return all targets to calculate pos_weight.
         # To avoid opening all .pkl files, we can quickly scan them or rely on a cached list if available.
         # But for correctness, we'll quickly extract the labels from the dict/tuple.
-        print("Extracting targets for class weighting (this might take a few seconds)...")
+        print("Estimating targets for class weighting from a random sample (fast)...")
         targets_list = []
-        for file_path in self.files:
+        import random
+        # Sample up to 5000 files to get an accurate estimate of class imbalance without taking 10 minutes to read all 280k files.
+        sample_size = min(5000, len(self.files))
+        sampled_files = random.sample(self.files, sample_size)
+        
+        for file_path in sampled_files:
             with open(file_path, 'rb') as f:
                 data_dict = pickle.load(f)
             if isinstance(data_dict, dict):
@@ -215,7 +220,14 @@ class PklSeizureDataset(Dataset):
             else:
                 label = 0
             targets_list.append(label)
-        return targets_list
+        
+        # Scale the counts up to the full dataset size for accurate pos_weight computation
+        pos_ratio = sum(targets_list) / len(targets_list) if len(targets_list) > 0 else 0
+        total_pos_estimated = int(pos_ratio * len(self.files))
+        
+        # Create a dummy list representing the estimated full dataset class distribution
+        full_estimated_targets = [1] * total_pos_estimated + [0] * (len(self.files) - total_pos_estimated)
+        return full_estimated_targets
 
     def __getitem__(self, idx):
         file_path = self.files[idx]
