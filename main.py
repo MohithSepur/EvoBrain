@@ -1,5 +1,8 @@
-import numpy as np
 import os
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+import numpy as np
 import pickle
 import torch
 import json
@@ -314,7 +317,7 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
     nll_meter = utils.AverageMeter()
 
     # Initialize GradScaler for AMP
-    scaler = torch.cuda.amp.GradScaler(enabled=args.cuda)
+    scaler = torch.cuda.amp.GradScaler(enabled=(args.cuda and args.amp))
 
     # Train
     log.info('Training...')
@@ -348,7 +351,7 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
                 initial_memory = torch.cuda.memory_allocated(device) if torch.cuda.is_available() else 0
 
                 # Forward with AMP
-                with torch.cuda.amp.autocast(enabled=args.cuda):
+                with torch.cuda.amp.autocast(enabled=(args.cuda and args.amp)):
                     if args.model_name == "evobrain" or args.model_name == "evolvegcn" or args.model_name == "gru_gcn":
                         logits, _ = model(x, seq_lengths, adj)
                     elif args.model_name == "dcrnn":
@@ -501,7 +504,7 @@ def evaluate(
 
             start_time = time.time()
             # Forward with AMP
-            with torch.cuda.amp.autocast(enabled=args.cuda):
+            with torch.cuda.amp.autocast(enabled=(args.cuda and args.amp)):
                 if args.model_name == "evobrain":
                     logits, hidden = model(x, seq_lengths, adj)
                 elif args.model_name == "gru_gcn":
