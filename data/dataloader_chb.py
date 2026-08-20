@@ -218,7 +218,6 @@ class PklSeizureDataset(Dataset):
 
         if raw_data.ndim == 2:
             num_ch, n_samples = raw_data.shape
-            self.num_nodes = num_ch
             # Resample from 256 Hz (e.g. 2560 samples for 10s) to 200 Hz (2000 samples)
             target_samples = int(self.max_seq_len * FREQUENCY)
             if n_samples != target_samples:

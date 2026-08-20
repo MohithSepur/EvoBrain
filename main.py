@@ -322,11 +322,11 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
                 batch_size = x.shape[0]
 
                 # input seqs
-                x = x.to(device)
+                x = torch.nan_to_num(x.to(device), nan=0.0, posinf=0.0, neginf=0.0)
                 y = y.view(-1).to(device)  # (batch_size,)
                 seq_lengths = seq_lengths.view(-1).to(device)  # (batch_size,)
                 supports = supports.to(device)
-                adj = adj.to(device)
+                adj = torch.nan_to_num(adj.to(device), nan=0.0, posinf=1.0, neginf=0.0)
 
                 # Zero out optimizer first
                 optimizer.zero_grad()
@@ -462,11 +462,11 @@ def evaluate(
             batch_size = x.shape[0]
 
             # Input seqs
-            x = x.to(device)
+            x = torch.nan_to_num(x.to(device), nan=0.0, posinf=0.0, neginf=0.0)
             y = y.view(-1).to(device)  # (batch_size,)
             seq_lengths = seq_lengths.view(-1).to(device)  # (batch_size,)
             supports = supports.to(device)
-            adj = adj.to(device)
+            adj = torch.nan_to_num(adj.to(device), nan=0.0, posinf=1.0, neginf=0.0)
 
             start_time = time.time()
             # Forward
