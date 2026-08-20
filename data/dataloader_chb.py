@@ -2,9 +2,14 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pyedflib
-import utils
-from constants import INCLUDED_CHANNELS, CHBMIT_INCLUDED_CHANNELS, FREQUENCY
-from utils import StandardScaler
+try:
+    import utils
+    from constants import INCLUDED_CHANNELS, CHBMIT_INCLUDED_CHANNELS, FREQUENCY
+    from utils import StandardScaler
+except ImportError:
+    import data.utils as utils
+    from data.constants import INCLUDED_CHANNELS, CHBMIT_INCLUDED_CHANNELS, FREQUENCY
+    from data.utils import StandardScaler
 from torch.utils.data import Dataset, DataLoader
 import torch
 import math
@@ -126,6 +131,145 @@ def parseTxtFiles(split_type, seizure_file, nonseizure_file,
     print(print_str)
 
     return combined_tuples
+
+
+class PklSeizureDataset(Dataset):
+    def __init__(
+            self,
+            data_dir,
+            split='train',
+            time_step_size=1,
+            max_seq_len=10,
+            use_fft=True,
+            standardize=False,
+            scaler=None,
+            data_augment=False,
+            graph_type='dynamic',
+            top_k=3,
+            filter_type='laplacian'):
+        """
+        Loads preprocessed .pkl segment clips directly (e.g. from processed_seg/train, val, test)
+        where each .pkl contains {'X': segment, 'y': label}.
+        """
+        self.split = split
+        self.time_step_size = time_step_size
+        self.max_seq_len = max_seq_len
+        self.use_fft = use_fft
+        self.standardize = standardize
+        self.scaler = scaler
+        self.data_augment = data_augment
+        self.graph_type = graph_type
+        self.top_k = top_k
+        self.filter_type = filter_type
+
+        # Support 'val' and 'dev' interchangeably
+        folder_candidates = ['val', 'dev'] if split in ['val', 'dev'] else [split]
+        split_dir = None
+        for fc in folder_candidates:
+            cand_path = os.path.join(data_dir, fc)
+            if os.path.exists(cand_path):
+                split_dir = cand_path
+                break
+
+        if split_dir is None:
+            split_dir = data_dir
+
+        self.files = sorted([
+            os.path.join(split_dir, f) for f in os.listdir(split_dir)
+            if f.endswith('.pkl') and not f.startswith('.')
+        ]) if os.path.exists(split_dir) else []
+
+        self.size = len(self.files)
+        self.num_nodes = 16
+
+        # Inspect first file to detect number of channels
+        if self.size > 0:
+            try:
+                with open(self.files[0], 'rb') as f:
+                    sample_dict = pickle.load(f)
+                sample_data = sample_dict.get('X', sample_dict.get('data', None)) if isinstance(sample_dict, dict) else sample_dict
+                if sample_data is not None:
+                    sample_arr = np.array(sample_data)
+                    self.num_nodes = sample_arr.shape[0] if sample_arr.ndim >= 2 else 16
+            except Exception:
+                self.num_nodes = 16
+
+        print(f"[{split.upper()}] Loaded {self.size} .pkl segment files ({self.num_nodes} channels) from {split_dir}")
+
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, idx):
+        file_path = self.files[idx]
+        file_name = os.path.basename(file_path)
+        with open(file_path, 'rb') as f:
+            data_dict = pickle.load(f)
+
+        if isinstance(data_dict, dict):
+            raw_data = data_dict.get('X', data_dict.get('data', None))
+            seizure_label = int(data_dict.get('y', data_dict.get('label', 0)))
+        elif isinstance(data_dict, (tuple, list)):
+            raw_data, seizure_label = data_dict[0], int(data_dict[1])
+        else:
+            raw_data, seizure_label = data_dict, 0
+
+        raw_data = np.array(raw_data, dtype=np.float32)
+        if raw_data.ndim == 2:
+            num_ch, n_samples = raw_data.shape
+            self.num_nodes = num_ch
+            # Resample from 256 Hz (e.g. 2560 samples for 10s) to 200 Hz (2000 samples)
+            target_samples = int(self.max_seq_len * FREQUENCY)
+            if n_samples != target_samples:
+                raw_data = scipy.signal.resample(raw_data, target_samples, axis=1)
+
+            physical_step = int(self.time_step_size * FREQUENCY)
+            time_steps = []
+            start_t = 0
+            while start_t <= raw_data.shape[1] - physical_step:
+                end_t = start_t + physical_step
+                step_data = raw_data[:, start_t:end_t]
+                if self.use_fft:
+                    step_data, _ = computeFFT(step_data, n=physical_step)
+                time_steps.append(step_data)
+                start_t = end_t
+            eeg_clip = np.stack(time_steps, axis=0)  # (max_seq_len, num_nodes, num_features)
+
+        elif raw_data.ndim == 3:
+            if raw_data.shape[1] == self.max_seq_len:
+                raw_data = raw_data.transpose(1, 0, 2)
+            if self.use_fft and raw_data.shape[-1] == int(self.time_step_size * FREQUENCY):
+                steps = []
+                for t in range(raw_data.shape[0]):
+                    fft_step, _ = computeFFT(raw_data[t], n=raw_data.shape[-1])
+                    steps.append(fft_step)
+                eeg_clip = np.stack(steps, axis=0)
+            else:
+                eeg_clip = raw_data
+        else:
+            eeg_clip = raw_data
+
+        curr_feature = eeg_clip.copy()
+        if self.standardize and self.scaler is not None:
+            curr_feature = self.scaler.transform(curr_feature)
+
+        x = torch.FloatTensor(curr_feature)
+        y = torch.FloatTensor([seizure_label])
+        seq_len = torch.LongTensor([self.max_seq_len])
+        writeout_fn = file_name.replace('.pkl', '')
+
+        # Fast In-Memory Dynamic Graph Adjacency Matrix
+        seq_len_dim, num_sensors_dim, _ = curr_feature.shape
+        norms = np.linalg.norm(curr_feature, axis=-1, keepdims=True)
+        norms[norms == 0] = 1e-8
+        norm_eeg = curr_feature / norms
+        adj_mat_seq = np.abs(norm_eeg @ norm_eeg.swapaxes(-1, -2)).astype(np.float32)
+        for t in range(seq_len_dim):
+            np.fill_diagonal(adj_mat_seq[t], 1.0)
+
+        supports = torch.empty(0)
+        adj_mat = torch.FloatTensor(adj_mat_seq)
+
+        return x, y, seq_len, supports, adj_mat, writeout_fn
 
 
 class SeizureDataset(Dataset):
@@ -544,6 +688,17 @@ def load_dataset_chb(
                 stds = pickle.load(f)
             scaler = StandardScaler(mean=means, std=stds)
 
+    # Check if input_dir contains preprocessed .pkl segment dataset
+    is_pkl_mode = False
+    if input_dir and os.path.exists(input_dir):
+        for sub in ['train', 'val', 'dev', 'test']:
+            p = os.path.join(input_dir, sub)
+            if os.path.exists(p) and any(f.endswith('.pkl') for f in os.listdir(p)):
+                is_pkl_mode = True
+                break
+        if not is_pkl_mode and any(f.endswith('.pkl') for f in os.listdir(input_dir)):
+            is_pkl_mode = True
+
     dataloaders = {}
     datasets = {}
     for split in ['train', 'dev', 'test']:
@@ -552,22 +707,37 @@ def load_dataset_chb(
         else:
             data_augment = False  # never do augmentation on dev/test sets
 
-        dataset = SeizureDataset(input_dir=input_dir,
-                                 raw_data_dir=raw_data_dir,
-                                 time_step_size=time_step_size,
-                                 max_seq_len=max_seq_len,
-                                 standardize=standardize,
-                                 scaler=scaler,
-                                 split=split,
-                                 data_augment=data_augment,
-                                 adj_mat_dir=adj_mat_dir,
-                                 graph_type=graph_type,
-                                 top_k=top_k,
-                                 filter_type=filter_type,
-                                 sampling_ratio=sampling_ratio,
-                                 seed=seed,
-                                 use_fft=use_fft,
-                                 preproc_dir=preproc_dir)
+        if is_pkl_mode:
+            dataset = PklSeizureDataset(
+                data_dir=input_dir,
+                split=split,
+                time_step_size=time_step_size,
+                max_seq_len=max_seq_len,
+                use_fft=use_fft,
+                standardize=standardize,
+                scaler=scaler,
+                data_augment=data_augment,
+                graph_type=graph_type,
+                top_k=top_k,
+                filter_type=filter_type
+            )
+        else:
+            dataset = SeizureDataset(input_dir=input_dir,
+                                     raw_data_dir=raw_data_dir,
+                                     time_step_size=time_step_size,
+                                     max_seq_len=max_seq_len,
+                                     standardize=standardize,
+                                     scaler=scaler,
+                                     split=split,
+                                     data_augment=data_augment,
+                                     adj_mat_dir=adj_mat_dir,
+                                     graph_type=graph_type,
+                                     top_k=top_k,
+                                     filter_type=filter_type,
+                                     sampling_ratio=sampling_ratio,
+                                     seed=seed,
+                                     use_fft=use_fft,
+                                     preproc_dir=preproc_dir)
 
         if split == 'train':
             shuffle = True

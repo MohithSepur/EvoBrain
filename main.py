@@ -107,6 +107,11 @@ def main(args):
             sampling_ratio=1,
             seed=123,
             preproc_dir=args.preproc_dir)
+            
+        # Automatically update num_nodes if dataset has custom channels (e.g., 16 channels)
+        if 'train' in datasets and hasattr(datasets['train'], 'num_nodes'):
+            args.num_nodes = datasets['train'].num_nodes
+            log.info(f"Auto-detected {args.num_nodes} electrode channels for CHB-MIT.")
     else: #TUSZ
         print("Loading TUSZ dataset...")
         if args.task == 'detection':
