@@ -739,13 +739,7 @@ class EvoBrain(nn.Module):
             ew_max = ew.max()
             if ew_max > 0:
                 ew = ew / (ew_max + 1e-6)
-            ew = torch.clamp(torch.nan_to_num(ew, nan=0.0, posinf=1.0, neginf=0.0), 0.0, 1.0)
-
-            data = Data(
-                x=node_last[i],
-                edge_index=edge_tuples,
-                edge_weight=ew.squeeze(-1)
-            )
+            ew = torch.clamp(torch.nan_to_num(ew, nan=1e-4, posinf=1.0, neginf=1e-4), min=1e-4, max=1.0)
 
             if self.num_eigenvectors > 0:
                 from torch_geometric.utils import get_laplacian, to_dense_adj
@@ -774,18 +768,18 @@ class EvoBrain(nn.Module):
                 x_i = node_last[i]
 
             node_with_pe_list.append(x_i)
-            
             edge_index_list.append(edge_tuples + i * node)
-            edge_weight_list.append(edge_weights[i].squeeze(-1))
+            edge_weight_list.append(ew.squeeze(-1))
 
         # [b, node, dim(+k)]
         node_with_pe = torch.stack(node_with_pe_list, dim=0)
 
         x = self.activate(node_with_pe)
-        x = x.view(b * node_last.size(1), -1)
+        x = torch.nan_to_num(x.view(b * node_last.size(1), -1), nan=0.0, posinf=0.0, neginf=0.0)
 
         edge_index = torch.cat(edge_index_list, dim=1)   # [2, b*E]
         edge_weight = torch.cat(edge_weight_list, dim=0) # [b*E]
+        edge_weight = torch.clamp(torch.nan_to_num(edge_weight, nan=1e-4, posinf=1.0, neginf=1e-4), min=1e-4, max=1.0)
 
         out = self.gnnx2.forward(
             edge_index,
@@ -793,6 +787,7 @@ class EvoBrain(nn.Module):
             x
         )
 
+        out = torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
         outputs = out.view(b, node_last.size(1), -1)
         return outputs
 
