@@ -199,6 +199,24 @@ class PklSeizureDataset(Dataset):
     def __len__(self):
         return self.size
 
+    def targets(self):
+        # We need to return all targets to calculate pos_weight.
+        # To avoid opening all .pkl files, we can quickly scan them or rely on a cached list if available.
+        # But for correctness, we'll quickly extract the labels from the dict/tuple.
+        print("Extracting targets for class weighting (this might take a few seconds)...")
+        targets_list = []
+        for file_path in self.files:
+            with open(file_path, 'rb') as f:
+                data_dict = pickle.load(f)
+            if isinstance(data_dict, dict):
+                label = int(data_dict.get('y', data_dict.get('label', 0)))
+            elif isinstance(data_dict, (tuple, list)):
+                label = int(data_dict[1])
+            else:
+                label = 0
+            targets_list.append(label)
+        return targets_list
+
     def __getitem__(self, idx):
         file_path = self.files[idx]
         file_name = os.path.basename(file_path)
@@ -221,7 +239,7 @@ class PklSeizureDataset(Dataset):
             # Resample from 256 Hz (e.g. 2560 samples for 10s) to 200 Hz (2000 samples)
             target_samples = int(self.max_seq_len * FREQUENCY)
             if n_samples != target_samples:
-                raw_data = scipy.signal.resample(raw_data, target_samples, axis=1)
+                raw_data = scipy.signal.resample_poly(raw_data, up=target_samples, down=n_samples, axis=1)
                 raw_data = np.nan_to_num(raw_data, nan=0.0, posinf=0.0, neginf=0.0)
 
             physical_step = int(self.time_step_size * FREQUENCY)
