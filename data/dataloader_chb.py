@@ -214,6 +214,8 @@ class PklSeizureDataset(Dataset):
             raw_data, seizure_label = data_dict, 0
 
         raw_data = np.array(raw_data, dtype=np.float32)
+        raw_data = np.nan_to_num(raw_data, nan=0.0, posinf=0.0, neginf=0.0)
+
         if raw_data.ndim == 2:
             num_ch, n_samples = raw_data.shape
             self.num_nodes = num_ch
@@ -221,6 +223,7 @@ class PklSeizureDataset(Dataset):
             target_samples = int(self.max_seq_len * FREQUENCY)
             if n_samples != target_samples:
                 raw_data = scipy.signal.resample(raw_data, target_samples, axis=1)
+                raw_data = np.nan_to_num(raw_data, nan=0.0, posinf=0.0, neginf=0.0)
 
             physical_step = int(self.time_step_size * FREQUENCY)
             time_steps = []
@@ -230,6 +233,7 @@ class PklSeizureDataset(Dataset):
                 step_data = raw_data[:, start_t:end_t]
                 if self.use_fft:
                     step_data, _ = computeFFT(step_data, n=physical_step)
+                step_data = np.nan_to_num(step_data, nan=0.0, posinf=0.0, neginf=0.0)
                 time_steps.append(step_data)
                 start_t = end_t
             eeg_clip = np.stack(time_steps, axis=0)  # (max_seq_len, num_nodes, num_features)
@@ -241,6 +245,7 @@ class PklSeizureDataset(Dataset):
                 steps = []
                 for t in range(raw_data.shape[0]):
                     fft_step, _ = computeFFT(raw_data[t], n=raw_data.shape[-1])
+                    fft_step = np.nan_to_num(fft_step, nan=0.0, posinf=0.0, neginf=0.0)
                     steps.append(fft_step)
                 eeg_clip = np.stack(steps, axis=0)
             else:
@@ -248,9 +253,10 @@ class PklSeizureDataset(Dataset):
         else:
             eeg_clip = raw_data
 
-        curr_feature = eeg_clip.copy()
+        curr_feature = np.nan_to_num(eeg_clip.copy(), nan=0.0, posinf=0.0, neginf=0.0)
         if self.standardize and self.scaler is not None:
             curr_feature = self.scaler.transform(curr_feature)
+            curr_feature = np.nan_to_num(curr_feature, nan=0.0, posinf=0.0, neginf=0.0)
 
         x = torch.FloatTensor(curr_feature)
         y = torch.FloatTensor([seizure_label])
@@ -260,9 +266,11 @@ class PklSeizureDataset(Dataset):
         # Fast In-Memory Dynamic Graph Adjacency Matrix
         seq_len_dim, num_sensors_dim, _ = curr_feature.shape
         norms = np.linalg.norm(curr_feature, axis=-1, keepdims=True)
-        norms[norms == 0] = 1e-8
+        norms = np.maximum(norms, 1e-5)
         norm_eeg = curr_feature / norms
         adj_mat_seq = np.abs(norm_eeg @ norm_eeg.swapaxes(-1, -2)).astype(np.float32)
+        adj_mat_seq = np.nan_to_num(adj_mat_seq, nan=0.0, posinf=1.0, neginf=0.0)
+        adj_mat_seq = np.clip(adj_mat_seq, 0.0, 1.0)
         for t in range(seq_len_dim):
             np.fill_diagonal(adj_mat_seq[t], 1.0)
 

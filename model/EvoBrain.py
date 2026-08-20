@@ -725,9 +725,10 @@ class EvoBrain(nn.Module):
 
         edge_tuples = edge_tuples.to(device)
 
-        node_last = all_node_embeds[-1].to(device)   # [b, node, dim]
-        edge_last = all_edge_embeds[-1].to(device)   # [b, E, dim]
+        node_last = torch.nan_to_num(all_node_embeds[-1].to(device), nan=0.0, posinf=0.0, neginf=0.0)   # [b, node, dim]
+        edge_last = torch.nan_to_num(all_edge_embeds[-1].to(device), nan=0.0, posinf=0.0, neginf=0.0)   # [b, E, dim]
         edge_weights = self.edge_activate(self.edge_transform(edge_last))  # [b, E, 1]
+        edge_weights = torch.nan_to_num(edge_weights, nan=0.0, posinf=1.0, neginf=0.0)
 
         node_with_pe_list = []
         edge_index_list = []
@@ -735,7 +736,10 @@ class EvoBrain(nn.Module):
 
         for i in range(b):
             ew = edge_weights[i]
-            ew = ew / (ew.max() + 1e-6)
+            ew_max = ew.max()
+            if ew_max > 0:
+                ew = ew / (ew_max + 1e-6)
+            ew = torch.clamp(torch.nan_to_num(ew, nan=0.0, posinf=1.0, neginf=0.0), 0.0, 1.0)
 
             data = Data(
                 x=node_last[i],
