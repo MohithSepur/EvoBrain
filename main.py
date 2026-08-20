@@ -567,12 +567,16 @@ def evaluate(
     eval_loss = (nll_meter.avg if nll_meter is not None else (loss_meter.avg if 'loss_meter' in locals() else loss.item()))
     results_list = [('loss', eval_loss),
                     ('acc', scores_dict['acc']),
+                    ('balanced_acc', scores_dict.get('balanced_acc', 0.0)),
                     ('F1', scores_dict['F1']),
                     ('recall', scores_dict['recall']),
                     ('precision', scores_dict['precision']),
+                    ('specificity', scores_dict.get('specificity', 0.0)),
                     ('best_thresh', best_thresh)]
     if 'auroc' in scores_dict.keys():
         results_list.append(('auroc', scores_dict['auroc']))
+    if 'pr_auc' in scores_dict.keys():
+        results_list.append(('pr_auc', scores_dict['pr_auc']))
     results = OrderedDict(results_list)
 
     return results

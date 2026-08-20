@@ -5,7 +5,7 @@ licensed under the MIT License.
 """
 
 from contextlib import contextmanager
-from sklearn.metrics import precision_recall_curve, accuracy_score, roc_auc_score
+from sklearn.metrics import precision_recall_curve, accuracy_score, roc_auc_score, average_precision_score, balanced_accuracy_score
 from sklearn.metrics import f1_score, recall_score, precision_score, confusion_matrix
 from collections import OrderedDict, defaultdict
 from itertools import repeat
@@ -312,6 +312,7 @@ def eval_dict(y_pred, y, y_prob=None, file_names=None, average='macro'):
 
     if y is not None:
         scores_dict['acc'] = accuracy_score(y_true=y, y_pred=y_pred)
+        scores_dict['balanced_acc'] = balanced_accuracy_score(y_true=y, y_pred=y_pred)
         scores_dict['F1'] = f1_score(y_true=y, y_pred=y_pred, average=average)
         scores_dict['precision'] = precision_score(
             y_true=y, y_pred=y_pred, average=average)
@@ -319,16 +320,20 @@ def eval_dict(y_pred, y, y_prob=None, file_names=None, average='macro'):
             y_true=y, y_pred=y_pred, average=average)
         
         if len(set(y)) <= 2:
-            # confusion_matrix を使用して特異度(specificity)を計算
+            # Calculate specificity using confusion matrix
             cm_res = confusion_matrix(y_true=y, y_pred=y_pred, labels=[0, 1])
             tn, fp, fn, tp = cm_res.ravel()
-            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0  # ゼロ除算の回避
+            specificity = tn / (tn + fp) if (tn + fp) > 0 else 0  # Avoid division by zero
             scores_dict['specificity'] = specificity
 
-            # y_prob が与えられている場合は AUROC を計算
+            # If predicted probabilities are provided, compute AUROC and PR-AUC
             if y_prob is not None and len(set(y)) > 1:
                 try:
                     scores_dict['auroc'] = roc_auc_score(y_true=y, y_score=y_prob)
+                except ValueError:
+                    pass
+                try:
+                    scores_dict['pr_auc'] = average_precision_score(y_true=y, y_score=y_prob)
                 except ValueError:
                     pass
 
