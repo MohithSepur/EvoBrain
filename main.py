@@ -281,8 +281,10 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
     # Define loss function
     if (args.task == 'detection') or (args.task == 'prediction'):
         if hasattr(train_loader.dataset, 'pos_weight') and train_loader.dataset.pos_weight is not None:
-            pos_weight = torch.tensor([train_loader.dataset.pos_weight], device=device, dtype=torch.float32)
-            log.info(f"Using BCEWithLogitsLoss with dynamic pos_weight: {train_loader.dataset.pos_weight:.2f}")
+            raw_pw = train_loader.dataset.pos_weight
+            smooth_pw = float(min(np.sqrt(raw_pw) if raw_pw > 1.0 else raw_pw, 20.0))
+            pos_weight = torch.tensor([smooth_pw], device=device, dtype=torch.float32)
+            log.info(f"Using BCEWithLogitsLoss with smoothed pos_weight: {smooth_pw:.2f} (raw ratio: {raw_pw:.2f})")
             loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight).to(device)
         else:
             loss_fn = nn.BCEWithLogitsLoss().to(device)
@@ -359,7 +361,8 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
                     if args.num_classes == 1 or logits.shape[-1] == 1:
                         logits = logits.view(-1)          
                     target = y.long() if isinstance(loss_fn, nn.CrossEntropyLoss) else y.float()
-                    loss = loss_fn(logits, target)
+                    # Calculate loss in float32 for numerical stability
+                    loss = loss_fn(logits.float(), target.float())
 
                 # Loss shield: skip non-finite losses safely
                 if not torch.isfinite(loss):
@@ -371,12 +374,23 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
                 loss_val = loss.item()
 
                 # Backward with AMP scaling
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                nn.utils.clip_grad_norm_(
-                    model.parameters(), args.max_grad_norm)
-                scaler.step(optimizer)
-                scaler.update()
+                if use_amp:
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                    # Check if gradients are finite before clipping to prevent inf * 0.0 = NaN
+                    valid_gradients = True
+                    for p in model.parameters():
+                        if p.grad is not None and not torch.isfinite(p.grad).all():
+                            valid_gradients = False
+                            break
+                    if valid_gradients:
+                        nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                        scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    loss.backward()
+                    nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                    optimizer.step()
 
                 end_time = time.time()
                 max_memory = torch.cuda.max_memory_allocated(device) if torch.cuda.is_available() else 0
@@ -507,21 +521,22 @@ def evaluate(
 
             if args.num_classes == 1:  # binary detection
                 logits = logits.view(-1)  # (batch_size,)
-                y_prob = torch.sigmoid(logits).cpu().numpy()  # (batch_size, )
+                y_prob = torch.sigmoid(logits.float()).cpu().numpy()  # (batch_size, )
+                y_prob = np.nan_to_num(y_prob, nan=0.0)
                 y_true = y.cpu().numpy().astype(int)
                 y_pred = (y_prob > best_thresh).astype(int)  # (batch_size, )
             else:
                 # (batch_size, num_classes)
-                y_prob = F.softmax(logits, dim=1).cpu().numpy()
+                y_prob = F.softmax(logits.float(), dim=1).cpu().numpy()
+                y_prob = np.nan_to_num(y_prob, nan=0.0)
                 y_pred = np.argmax(y_prob, axis=1).reshape(-1)  # (batch_size,)
                 y_true = y.cpu().numpy().astype(int)
             
             time_list.append(time.time() - start_time)
-            
 
             # Update loss
             target = y.long() if isinstance(loss_fn, nn.CrossEntropyLoss) else y.float()
-            loss = loss_fn(logits, target)
+            loss = loss_fn(logits.float(), target.float())
             loss_meter.update(loss.item(), batch_size)
             if nll_meter is not None:
                 nll_meter.update(loss.item(), batch_size)

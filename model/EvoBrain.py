@@ -744,25 +744,21 @@ class EvoBrain(nn.Module):
             )
 
             if self.num_eigenvectors > 0:
+                from torch_geometric.utils import get_laplacian, to_dense_adj
+                num_n = node_last[i].shape[0]
                 try:
-                    data_pe = self.laplacian_pe(data.detach())
-                    pe = data_pe.laplacian_eigenvector_pe.to(device)
+                    L_idx, L_w = get_laplacian(edge_tuples, ew.squeeze(-1), normalization="sym", num_nodes=num_n)
+                    L_dense = to_dense_adj(L_idx, max_num_nodes=num_n, edge_attr=L_w).squeeze(0)
+                    L_sym = (L_dense + L_dense.T) / 2.0
+                    L_reg = L_sym + 1e-4 * torch.eye(num_n, device=L_dense.device, dtype=L_dense.dtype)
+                    _, eig_vecs = torch.linalg.eigh(L_reg)
+                    pe = eig_vecs[:, :self.num_eigenvectors]
                 except Exception:
-                    from torch_geometric.utils import get_laplacian, to_dense_adj
-                    num_n = node_last[i].shape[0]
                     try:
-                        L_idx, L_w = get_laplacian(edge_tuples, ew.squeeze(-1), normalization="sym", num_nodes=num_n)
-                        L_dense = to_dense_adj(L_idx, max_num_nodes=num_n, edge_attr=L_w).squeeze(0)
-                        L_sym = (L_dense + L_dense.T) / 2.0
-                        L_reg = L_sym + 1e-4 * torch.eye(num_n, device=L_dense.device, dtype=L_dense.dtype)
-                        _, eig_vecs = torch.linalg.eigh(L_reg)
-                        pe = eig_vecs[:, :self.num_eigenvectors]
+                        u, _, _ = torch.linalg.svd((L_dense + L_dense.T) / 2.0)
+                        pe = u[:, :self.num_eigenvectors]
                     except Exception:
-                        try:
-                            u, _, _ = torch.linalg.svd((L_dense + L_dense.T) / 2.0)
-                            pe = u[:, :self.num_eigenvectors]
-                        except Exception:
-                            pe = torch.zeros(num_n, self.num_eigenvectors, device=device, dtype=node_last.dtype)
+                        pe = torch.zeros(num_n, self.num_eigenvectors, device=device, dtype=node_last.dtype)
                 
                 pe = torch.nan_to_num(pe, nan=0.0, posinf=0.0, neginf=0.0)
                 if pe.shape[1] < self.num_eigenvectors:
