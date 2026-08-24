@@ -389,8 +389,18 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
                     scaler.update()
                 else:
                     loss.backward()
-                    nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-                    optimizer.step()
+                    # Check if gradients are finite before clipping/stepping (mirrors AMP path)
+                    valid_gradients = all(
+                        torch.isfinite(p.grad).all()
+                        for p in model.parameters()
+                        if p.grad is not None
+                    )
+                    if valid_gradients:
+                        nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                        optimizer.step()
+                    else:
+                        log.warning("Non-finite gradients detected in FP32 mode. Skipping optimizer step to protect weights.")
+                        optimizer.zero_grad()
 
                 end_time = time.time()
                 max_memory = torch.cuda.max_memory_allocated(device) if torch.cuda.is_available() else 0

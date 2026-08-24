@@ -698,6 +698,8 @@ class EvoBrain(nn.Module):
         
         if self.reduce_node == "mingru" or self.reduce_node == "mamba":
             inputs = inputs.permute(1, 0, 2)
+            # Clamp inputs to prevent extreme values from overflowing in Mamba's backward scan
+            inputs = torch.clamp(inputs, min=-50.0, max=50.0)
             node_embeds = self.snn_node.forward(inputs)
             node_embeds =  node_embeds.permute(1, 0, 2)
         else:
@@ -712,6 +714,8 @@ class EvoBrain(nn.Module):
 
         if self.reduce_edge == "mingru" or self.reduce_edge == "mamba":
             edge_features =  edge_features.permute(1, 0, 2)
+            # Clamp inputs to prevent extreme values from overflowing in Mamba's backward scan
+            edge_features = torch.clamp(edge_features, min=-50.0, max=50.0)
             edge_embeds = self.snn_edge.forward(edge_features)
             edge_embeds =  edge_embeds.permute(1, 0, 2)
         else:
