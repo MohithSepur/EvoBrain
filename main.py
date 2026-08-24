@@ -304,7 +304,8 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
     scheduler = CosineAnnealingLR(optimizer, T_max=args.num_epochs)
 
     # Mixed precision AMP scaler
-    use_amp = getattr(args, 'amp', True) and (device.type == 'cuda' or (isinstance(device, str) and 'cuda' in device))
+    is_cuda = (device.type == 'cuda') if isinstance(device, torch.device) else ('cuda' in str(device))
+    use_amp = getattr(args, 'amp', True) and is_cuda and torch.cuda.is_available()
     scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
 
     # average meter for validation loss
