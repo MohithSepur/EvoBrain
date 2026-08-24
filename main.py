@@ -274,6 +274,10 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
     Perform training and evaluate on val set
     """
 
+    # Data loaders
+    train_loader = dataloaders['train']
+    dev_loader = dataloaders['dev']
+
     # Define loss function
     if (args.task == 'detection') or (args.task == 'prediction'):
         if hasattr(train_loader.dataset, 'pos_weight') and train_loader.dataset.pos_weight is not None:
@@ -284,10 +288,6 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
             loss_fn = nn.BCEWithLogitsLoss().to(device)
     else:
         loss_fn = nn.CrossEntropyLoss().to(device)
-
-    # Data loaders
-    train_loader = dataloaders['train']
-    dev_loader = dataloaders['dev']
 
     # Get saver
     saver = utils.CheckpointSaver(save_dir,
