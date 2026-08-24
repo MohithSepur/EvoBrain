@@ -16,7 +16,7 @@ def get_args():
                         help='Device to run the model.')
     parser.add_argument('--save_dir',
                         type=str,
-                        default="./results",
+                        default="./result",
                         help='Directory to save the outputs and checkpoints.')
     parser.add_argument(
         '--load_model_path',
