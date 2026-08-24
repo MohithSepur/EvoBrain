@@ -27,6 +27,10 @@ def get_args():
                         default=False,
                         action='store_true',
                         help='Whether perform training.')
+    parser.add_argument('--amp',
+                        default=True,
+                        action=argparse.BooleanOptionalAction,
+                        help='Whether to use automatic mixed precision (AMP).')
     parser.add_argument('--debug_anomaly',
                         default=False,
                         action='store_true',

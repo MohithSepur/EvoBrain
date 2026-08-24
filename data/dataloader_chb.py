@@ -463,123 +463,289 @@ class SeizureDataset(Dataset):
             print(f"adj_mat_seq.shape: {adj_mat_seq.shape}")
         return (x, y, seq_len, supports_seq, adj_mat_seq, writeout_fn)
 
+
+class PklSeizureDataset(Dataset):
+    """
+    Direct DataLoader for preprocessed .pkl segment files (train/val/test).
+    Handles uniform 16-channel EEG clips with fast polyphase resampling and FFT.
+    """
+    def __init__(
+            self,
+            data_dir,
+            split='train',
+            time_step_size=1,
+            max_seq_len=10,
+            use_fft=True,
+            standardize=True,
+            scaler=None,
+            data_augment=False,
+            graph_type='dynamic',
+            top_k=3,
+            filter_type='dual_random_walk'):
+        
+        self.data_dir = data_dir
+        self.split = split
+        self.time_step_size = time_step_size
+        self.max_seq_len = max_seq_len
+        self.use_fft = use_fft
+        self.standardize = standardize
+        self.scaler = scaler
+        self.data_augment = data_augment
+        self.graph_type = graph_type
+        self.top_k = top_k
+        self.filter_type = filter_type
+        self.files = []
+        self.num_nodes = 16
+        self.pos_weight = None
+
+        # Resolve split folder path (handle val/dev aliases)
+        possible_dirs = [
+            os.path.join(data_dir, split),
+            os.path.join(data_dir, 'val' if split == 'dev' else split),
+            os.path.join(data_dir, 'dev' if split == 'val' else split)
+        ]
+        split_dir = None
+        for p in possible_dirs:
+            if os.path.exists(p) and os.path.isdir(p):
+                split_dir = p
+                break
+
+        if split_dir is not None:
+            for root, _, filenames in os.walk(split_dir):
+                for f in filenames:
+                    if f.endswith('.pkl') and not f.startswith('.'):
+                        self.files.append(os.path.join(root, f))
+        elif os.path.exists(data_dir) and any(f.endswith('.pkl') for f in os.listdir(data_dir)):
+            # If all pkl files are directly in data_dir
+            for f in os.listdir(data_dir):
+                if f.endswith('.pkl') and not f.startswith('.'):
+                    self.files.append(os.path.join(data_dir, f))
+
+        self.files.sort()
+        self.size = len(self.files)
+
+        # Inspect first valid file to detect number of channels
+        if self.size > 0:
+            try:
+                with open(self.files[0], 'rb') as f:
+                    sample_dict = pickle.load(f)
+                sample_data = sample_dict.get('X', sample_dict.get('data', None)) if isinstance(sample_dict, dict) else (sample_dict[0] if isinstance(sample_dict, (tuple, list)) else sample_dict)
+                if sample_data is not None:
+                    sample_arr = np.array(sample_data)
+                    self.num_nodes = sample_arr.shape[0] if sample_arr.ndim >= 2 else 16
+            except Exception:
+                self.num_nodes = 16
+
+        print(f"[{split.upper()}] Loaded {self.size:,} .pkl segment files ({self.num_nodes} channels) from {split_dir or data_dir}")
+
+        # Compute pos_weight for training set class balancing
+        if split == 'train' and self.size > 0:
+            try:
+                sample_size = min(3000, self.size)
+                sample_indices = np.random.RandomState(123).choice(self.size, sample_size, replace=False)
+                pos_count = 0
+                for idx in sample_indices:
+                    try:
+                        with open(self.files[idx], 'rb') as f:
+                            d = pickle.load(f)
+                        y_val = int(d.get('y', d.get('label', 0))) if isinstance(d, dict) else (int(d[1]) if isinstance(d, (tuple, list)) else 0)
+                        if y_val == 1:
+                            pos_count += 1
+                    except Exception:
+                        pass
+                neg_count = sample_size - pos_count
+                if pos_count > 0:
+                    self.pos_weight = float(neg_count) / float(pos_count)
+                else:
+                    self.pos_weight = 260.0  # standard CHB-MIT empirical imbalance ratio
+                print(f"[TRAIN] Class balance estimate: {pos_count} pos / {neg_count} neg in sample -> pos_weight={self.pos_weight:.2f}")
+            except Exception:
+                self.pos_weight = 260.0
+
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, idx):
+        file_path = self.files[idx]
+        file_name = os.path.basename(file_path)
+        with open(file_path, 'rb') as f:
+            data_dict = pickle.load(f)
+
+        if isinstance(data_dict, dict):
+            raw_data = data_dict.get('X', data_dict.get('data', None))
+            seizure_label = int(data_dict.get('y', data_dict.get('label', 0)))
+        elif isinstance(data_dict, (tuple, list)):
+            raw_data, seizure_label = data_dict[0], int(data_dict[1])
+        else:
+            raw_data, seizure_label = data_dict, 0
+
+        raw_data = np.array(raw_data, dtype=np.float32)
+        raw_data = np.nan_to_num(raw_data, nan=0.0, posinf=0.0, neginf=0.0)
+
+        if raw_data.ndim == 2:
+            num_ch, n_samples = raw_data.shape
+            self.num_nodes = num_ch
+            # Resample from 256 Hz (2560 samples for 10s) to 200 Hz (2000 samples)
+            target_samples = int(self.max_seq_len * FREQUENCY)
+            if n_samples != target_samples:
+                raw_data = scipy.signal.resample_poly(raw_data, up=target_samples, down=n_samples, axis=1)
+                raw_data = np.nan_to_num(raw_data, nan=0.0, posinf=0.0, neginf=0.0)
+
+            physical_step = int(self.time_step_size * FREQUENCY)
+            time_steps = []
+            start_t = 0
+            while start_t <= raw_data.shape[1] - physical_step:
+                end_t = start_t + physical_step
+                step_data = raw_data[:, start_t:end_t]
+                if self.use_fft:
+                    step_data, _ = computeFFT(step_data, n=physical_step)
+                time_steps.append(step_data)
+                start_t = end_t
+            eeg_clip = np.stack(time_steps, axis=0)  # (max_seq_len, num_nodes, num_features)
+
+        elif raw_data.ndim == 3:
+            if raw_data.shape[1] == self.max_seq_len:
+                raw_data = raw_data.transpose(1, 0, 2)
+            if self.use_fft and raw_data.shape[-1] == int(self.time_step_size * FREQUENCY):
+                steps = []
+                for t in range(raw_data.shape[0]):
+                    fft_step, _ = computeFFT(raw_data[t], n=raw_data.shape[-1])
+                    steps.append(fft_step)
+                eeg_clip = np.stack(steps, axis=0)
+            else:
+                eeg_clip = raw_data
+        else:
+            eeg_clip = raw_data
+
+        curr_feature = np.nan_to_num(eeg_clip.copy(), nan=0.0, posinf=0.0, neginf=0.0)
+        
+        # Standardization (Global scaler if provided, otherwise robust per-clip z-scoring)
+        if self.standardize and self.scaler is not None:
+            curr_feature = self.scaler.transform(curr_feature)
+            curr_feature = np.nan_to_num(curr_feature, nan=0.0, posinf=0.0, neginf=0.0)
+        else:
+            feat_mean = np.mean(curr_feature)
+            feat_std = np.std(curr_feature)
+            if feat_std > 1e-5:
+                curr_feature = (curr_feature - feat_mean) / feat_std
+            curr_feature = np.nan_to_num(curr_feature, nan=0.0, posinf=0.0, neginf=0.0)
+
+        x = torch.FloatTensor(curr_feature)
+        y = torch.FloatTensor([seizure_label])
+        seq_len = torch.LongTensor([self.max_seq_len])
+        writeout_fn = file_name.replace('.pkl', '')
+
+        # Fast In-Memory Dynamic Graph Adjacency Matrix with Self-Loops
+        seq_len_dim, num_sensors_dim, _ = curr_feature.shape
+        norms = np.linalg.norm(curr_feature, axis=-1, keepdims=True)
+        norms = np.maximum(norms, 1e-5)
+        norm_eeg = curr_feature / norms
+        adj_mat_seq = np.abs(norm_eeg @ norm_eeg.swapaxes(-1, -2)).astype(np.float32)
+        adj_mat_seq = np.nan_to_num(adj_mat_seq, nan=0.0, posinf=1.0, neginf=0.0)
+        adj_mat_seq = np.clip(adj_mat_seq, 0.0, 1.0)
+        for t in range(seq_len_dim):
+            np.fill_diagonal(adj_mat_seq[t], 1.0)
+
+        supports = torch.empty(0)
+        adj_mat = torch.FloatTensor(adj_mat_seq)
+
+        return x, y, seq_len, supports, adj_mat, writeout_fn
+
+
 def load_dataset_chb(
-        task=None,
-        input_dir=None,
-        raw_data_dir=None,
-        train_batch_size=64,
-        test_batch_size=None,
+        task,
+        input_dir,
+        raw_data_dir,
+        train_batch_size,
+        test_batch_size,
         time_step_size=1,
-        max_seq_len=60,
-        standardize=True,
+        max_seq_len=10,
+        standardize=False,
         num_workers=8,
         augmentation=False,
         adj_mat_dir=None,
-        graph_type=None,
-        top_k=None,
-        filter_type='laplacian',
-        use_fft=False,
+        graph_type='dynamic',
+        top_k=3,
+        filter_type='dual_random_walk',
+        use_fft=True,
         sampling_ratio=1,
         seed=123,
         preproc_dir=None):
     """
-    Args:
-        input_dir: dir to preprocessed h5 file
-        raw_data_dir: dir to TUSZ raw edf files
-        train_batch_size: int
-        test_batch_size: int
-        time_step_size: int, in seconds
-        max_seq_len: EEG clip length, in seconds
-        standardize: if True, will z-normalize wrt train set
-        num_workers: int
-        augmentation: if True, perform random augmentation on EEG
-        adj_mat_dir: dir to pre-computed distance graph adjacency matrix
-        graph_type: 'combined' (i.e. distance graph) or 'individual' (correlation graph)
-        top_k: int, top-k neighbors of each node to keep. For correlation graph only
-        filter_type: 'laplacian' for distance graph, 'dual_random_walk' for correlation graph
-        use_fft: whether perform Fourier transform
-        sampling_ratio: ratio of positive to negative examples for undersampling
-        seed: random seed for undersampling
-        preproc_dir: dir to preprocessed Fourier transformed data, optional
-    Returns:
-        dataloaders: dictionary of train/dev/test dataloaders
-        datasets: dictionary of train/dev/test datasets
-        scaler: standard scaler
+    Loads CHB-MIT dataset, supporting both pre-segmented .pkl directory structures
+    and original raw EDF / HDF5 files.
     """
-    if (graph_type is not None) and (
-            graph_type not in ['individual', 'combined', 'dynamic']):
-        raise NotImplementedError
-
-    # load mean and std
     scaler = None
     if standardize:
-        means_dir = os.path.join(
-            FILEMARKER_DIR,
-            'means_seq2seq_fft_' +
-            str(max_seq_len) +
-            's_szdetect_single.pkl')
-        stds_dir = os.path.join(
-            FILEMARKER_DIR,
-            'stds_seq2seq_fft_' +
-            str(max_seq_len) +
-            's_szdetect_single.pkl')
-
-        if not (os.path.exists(means_dir) and os.path.exists(stds_dir)):
-            # Fallback to 12s or any available scaler in FILEMARKER_DIR
-            fallback_means = os.path.join(FILEMARKER_DIR, 'means_seq2seq_fft_12s_szdetect_single.pkl')
-            fallback_stds = os.path.join(FILEMARKER_DIR, 'stds_seq2seq_fft_12s_szdetect_single.pkl')
-            if os.path.exists(fallback_means) and os.path.exists(fallback_stds):
-                print(f"Notice: {means_dir} not found. Reusing 12s scaler ({fallback_means}) since 1-second FFT scales are identical.")
-                means_dir = fallback_means
-                stds_dir = fallback_stds
-            else:
-                print(f"Warning: No scaler file found in {FILEMARKER_DIR}. Proceeding without standardization.")
-                means_dir = None
-                stds_dir = None
-
-        if means_dir and stds_dir and os.path.exists(means_dir) and os.path.exists(stds_dir):
+        means_dir = os.path.join(FILEMARKER_DIR, f'means_seq2seq_fft_{max_seq_len}s_szdetect_single.pkl')
+        stds_dir = os.path.join(FILEMARKER_DIR, f'stds_seq2seq_fft_{max_seq_len}s_szdetect_single.pkl')
+        if os.path.exists(means_dir) and os.path.exists(stds_dir):
             with open(means_dir, 'rb') as f:
                 means = pickle.load(f)
             with open(stds_dir, 'rb') as f:
                 stds = pickle.load(f)
             scaler = StandardScaler(mean=means, std=stds)
 
+    # Check if input_dir contains preprocessed .pkl segment dataset
+    is_pkl_mode = False
+    if input_dir and os.path.exists(input_dir):
+        for sub in ['train', 'val', 'dev', 'test']:
+            p = os.path.join(input_dir, sub)
+            if os.path.exists(p) and any(f.endswith('.pkl') for f in os.listdir(p)):
+                is_pkl_mode = True
+                break
+        if not is_pkl_mode and any(f.endswith('.pkl') for f in os.listdir(input_dir)):
+            is_pkl_mode = True
+
     dataloaders = {}
     datasets = {}
     for split in ['train', 'dev', 'test']:
-        if split == 'train':
-            data_augment = augmentation
+        data_augment = augmentation if split == 'train' else False
+
+        if is_pkl_mode:
+            dataset = PklSeizureDataset(
+                data_dir=input_dir,
+                split=split,
+                time_step_size=time_step_size,
+                max_seq_len=max_seq_len,
+                use_fft=use_fft,
+                standardize=standardize,
+                scaler=scaler,
+                data_augment=data_augment,
+                graph_type=graph_type,
+                top_k=top_k,
+                filter_type=filter_type
+            )
         else:
-            data_augment = False  # never do augmentation on dev/test sets
+            dataset = SeizureDataset(
+                input_dir=input_dir,
+                raw_data_dir=raw_data_dir,
+                time_step_size=time_step_size,
+                max_seq_len=max_seq_len,
+                standardize=standardize,
+                scaler=scaler,
+                split=split,
+                data_augment=data_augment,
+                adj_mat_dir=adj_mat_dir,
+                graph_type=graph_type,
+                top_k=top_k,
+                filter_type=filter_type,
+                sampling_ratio=sampling_ratio,
+                seed=seed,
+                use_fft=use_fft,
+                preproc_dir=preproc_dir
+            )
 
-        dataset = SeizureDataset(input_dir=input_dir,
-                                 raw_data_dir=raw_data_dir,
-                                 time_step_size=time_step_size,
-                                 max_seq_len=max_seq_len,
-                                 standardize=standardize,
-                                 scaler=scaler,
-                                 split=split,
-                                 data_augment=data_augment,
-                                 adj_mat_dir=adj_mat_dir,
-                                 graph_type=graph_type,
-                                 top_k=top_k,
-                                 filter_type=filter_type,
-                                 sampling_ratio=sampling_ratio,
-                                 seed=seed,
-                                 use_fft=use_fft,
-                                 preproc_dir=preproc_dir)
+        shuffle = (split == 'train')
+        batch_size = train_batch_size if split == 'train' else test_batch_size
 
-        if split == 'train':
-            shuffle = True
-            batch_size = train_batch_size
-        else:
-            shuffle = False
-            batch_size = test_batch_size
-
-        loader = DataLoader(dataset=dataset,
-                            shuffle=shuffle,
-                            batch_size=batch_size,
-                            num_workers=num_workers)
+        loader = DataLoader(
+            dataset=dataset,
+            shuffle=shuffle,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            pin_memory=torch.cuda.is_available()
+        )
         dataloaders[split] = loader
         datasets[split] = dataset
 

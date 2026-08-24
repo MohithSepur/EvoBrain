@@ -84,8 +84,6 @@ def main(args):
     # Build dataset
     log.info('Building dataset...')
     if args.dataset in ['CHBMIT', 'CHB-MIT']:
-        if args.num_nodes == 19:
-            args.num_nodes = 18
         print("Loading CHB-MIT dataset...")
         from data.dataloader_chb import load_dataset_chb
         dataloaders, datasets, scaler = load_dataset_chb(
@@ -107,6 +105,11 @@ def main(args):
             sampling_ratio=1,
             seed=123,
             preproc_dir=args.preproc_dir)
+
+        # Automatically update num_nodes if dataset has custom channels (e.g. 16 channels)
+        if 'train' in datasets and hasattr(datasets['train'], 'num_nodes'):
+            args.num_nodes = datasets['train'].num_nodes
+            log.info(f"Auto-detected {args.num_nodes} electrode channels for CHB-MIT.")
     else: #TUSZ
         print("Loading TUSZ dataset...")
         if args.task == 'detection':
@@ -273,7 +276,12 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
 
     # Define loss function
     if (args.task == 'detection') or (args.task == 'prediction'):
-        loss_fn = nn.BCEWithLogitsLoss().to(device)
+        if hasattr(train_loader.dataset, 'pos_weight') and train_loader.dataset.pos_weight is not None:
+            pos_weight = torch.tensor([train_loader.dataset.pos_weight], device=device, dtype=torch.float32)
+            log.info(f"Using BCEWithLogitsLoss with dynamic pos_weight: {train_loader.dataset.pos_weight:.2f}")
+            loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight).to(device)
+        else:
+            loss_fn = nn.BCEWithLogitsLoss().to(device)
     else:
         loss_fn = nn.CrossEntropyLoss().to(device)
 
@@ -294,6 +302,10 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
     optimizer = optim.Adam(params=model.parameters(),
                            lr=args.lr_init, weight_decay=args.l2_wd)
     scheduler = CosineAnnealingLR(optimizer, T_max=args.num_epochs)
+
+    # Mixed precision AMP scaler
+    use_amp = getattr(args, 'amp', True) and (device.type == 'cuda' or (isinstance(device, str) and 'cuda' in device))
+    scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
 
     # average meter for validation loss
     nll_meter = utils.AverageMeter()
@@ -326,33 +338,44 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
                 # Zero out optimizer first
                 optimizer.zero_grad()
 
-                # Forward
-                # (batch_size, num_classes)
+                # Forward with AMP
                 start_time = time.time()
                 initial_memory = torch.cuda.memory_allocated(device) if torch.cuda.is_available() else 0
 
-                if args.model_name == "evobrain" or args.model_name == "evolvegcn" or args.model_name == "gru_gcn":
-                    logits, _ = model(x, seq_lengths, adj)
-                elif args.model_name == "dcrnn":
-                    logits, _ = model(x, seq_lengths, supports)     
-                elif args.model_name == "BIOT":
-                    logits, _ = model(x)  
-                elif args.model_name == "lstm" or args.model_name == "cnnlstm" or args.model_name == "graphs4mer":
-                    logits, _ = model(x, seq_lengths)
-                else:
-                    print("model_name: ", args.model_name)
-                    raise NotImplementedError
-                if logits.shape[-1] == 1:
-                    logits = logits.view(-1)          
-                target = y.long() if isinstance(loss_fn, nn.CrossEntropyLoss) else y.float()
-                loss = loss_fn(logits, target)
+                with torch.amp.autocast('cuda', enabled=use_amp):
+                    if args.model_name in ["evobrain", "evolvegcn", "gru_gcn"]:
+                        logits, _ = model(x, seq_lengths, adj)
+                    elif args.model_name == "dcrnn":
+                        logits, _ = model(x, seq_lengths, supports)     
+                    elif args.model_name == "BIOT":
+                        logits, _ = model(x)  
+                    elif args.model_name in ["lstm", "cnnlstm", "graphs4mer"]:
+                        logits, _ = model(x, seq_lengths)
+                    else:
+                        print("model_name: ", args.model_name)
+                        raise NotImplementedError
+                    
+                    if args.num_classes == 1 or logits.shape[-1] == 1:
+                        logits = logits.view(-1)          
+                    target = y.long() if isinstance(loss_fn, nn.CrossEntropyLoss) else y.float()
+                    loss = loss_fn(logits, target)
+
+                # Loss shield: skip non-finite losses safely
+                if not torch.isfinite(loss):
+                    log.warning(f"Non-finite loss ({loss.item() if hasattr(loss, 'item') else loss}) detected. Skipping batch to protect weights.")
+                    optimizer.zero_grad()
+                    progress_bar.update(batch_size)
+                    continue
+
                 loss_val = loss.item()
 
-                # Backward
-                loss.backward()
+                # Backward with AMP scaling
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
                 nn.utils.clip_grad_norm_(
                     model.parameters(), args.max_grad_norm)
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
 
                 end_time = time.time()
                 max_memory = torch.cuda.max_memory_allocated(device) if torch.cuda.is_available() else 0
@@ -547,7 +570,7 @@ def evaluate(
     log.info(f"Average Test Time per Batch: {avg_time_per_batch:.4f} seconds")
 
     # Threshold search, for detection only
-    if ((args.task == "detection") or (args.task == "prediction")) and (eval_set == 'dev') and is_test:
+    if ((args.task == "detection") or (args.task == "prediction")) and (eval_set == 'dev'):
         best_thresh = utils.thresh_max_f1(y_true=y_true_all, y_prob=y_prob_all)
         # update dev set y_pred based on best_thresh
         y_pred_all = (y_prob_all > best_thresh).astype(int)  # (batch_size, )
