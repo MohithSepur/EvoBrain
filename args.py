@@ -16,7 +16,7 @@ def get_args():
                         help='Device to run the model.')
     parser.add_argument('--save_dir',
                         type=str,
-                        default="./result",
+                        default="./results",
                         help='Directory to save the outputs and checkpoints.')
     parser.add_argument(
         '--load_model_path',
@@ -66,7 +66,7 @@ def get_args():
         help='Whether use individual graphs (cross-correlation) or combined graph (distance).')
     parser.add_argument('--max_seq_len',
                         type=int,
-                        default='12',
+                        default=10,
                         help='Maximum sequence length in seconds.')
     parser.add_argument(
         '--output_seq_len',
