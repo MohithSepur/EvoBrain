@@ -152,11 +152,6 @@ def get_args():
         default=False,
         action='store_true',
         help='Whether to stop running the model.')
-    parser.add_argument(
-        '--amp',
-        default=True,
-        action=argparse.BooleanOptionalAction,
-        help='Whether to use Automatic Mixed Precision (AMP) for faster training.')
 
 
     # Training/test args

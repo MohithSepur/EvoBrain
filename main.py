@@ -1,8 +1,5 @@
-import os
-os.environ['OMP_NUM_THREADS'] = '1'
-os.environ['MKL_NUM_THREADS'] = '1'
-os.environ['OPENBLAS_NUM_THREADS'] = '1'
 import numpy as np
+import os
 import pickle
 import torch
 import json
@@ -110,11 +107,6 @@ def main(args):
             sampling_ratio=1,
             seed=123,
             preproc_dir=args.preproc_dir)
-            
-        # Automatically update num_nodes if dataset has custom channels (e.g., 16 channels)
-        if 'train' in datasets and hasattr(datasets['train'], 'num_nodes'):
-            args.num_nodes = datasets['train'].num_nodes
-            log.info(f"Auto-detected {args.num_nodes} electrode channels for CHB-MIT.")
     else: #TUSZ
         print("Loading TUSZ dataset...")
         if args.task == 'detection':
@@ -281,17 +273,7 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
 
     # Define loss function
     if (args.task == 'detection') or (args.task == 'prediction'):
-        try:
-            train_targets = dataloaders['train'].dataset.targets()
-            num_pos = sum(train_targets)
-            num_neg = len(train_targets) - num_pos
-            pos_weight_val = num_neg / num_pos if num_pos > 0 else 1.0
-            log.info(f"Calculated pos_weight for BCEWithLogitsLoss: {pos_weight_val:.4f} (neg: {num_neg}, pos: {num_pos})")
-            pos_weight = torch.tensor([pos_weight_val]).to(device)
-            loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight).to(device)
-        except Exception as e:
-            log.info(f"Could not calculate pos_weight dynamically ({e}), using default BCEWithLogitsLoss.")
-            loss_fn = nn.BCEWithLogitsLoss().to(device)
+        loss_fn = nn.BCEWithLogitsLoss().to(device)
     else:
         loss_fn = nn.CrossEntropyLoss().to(device)
 
@@ -316,14 +298,11 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
     # average meter for validation loss
     nll_meter = utils.AverageMeter()
 
-    # Initialize GradScaler for AMP
-    scaler = torch.cuda.amp.GradScaler(enabled=(args.cuda and args.amp))
-
     # Train
     log.info('Training...')
     epoch = 0
     step = 0
-    prev_val_metric = None
+    prev_val_loss = 1e10
     patience_count = 0
     early_stop = False
     memory_usage_list = []
@@ -338,55 +317,42 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
                 batch_size = x.shape[0]
 
                 # input seqs
-                x = torch.nan_to_num(x.to(device), nan=0.0, posinf=0.0, neginf=0.0)
+                x = x.to(device)
                 y = y.view(-1).to(device)  # (batch_size,)
                 seq_lengths = seq_lengths.view(-1).to(device)  # (batch_size,)
                 supports = supports.to(device)
-                adj = torch.nan_to_num(adj.to(device), nan=0.0, posinf=1.0, neginf=0.0)
+                adj = adj.to(device)
 
                 # Zero out optimizer first
                 optimizer.zero_grad()
 
+                # Forward
+                # (batch_size, num_classes)
                 start_time = time.time()
                 initial_memory = torch.cuda.memory_allocated(device) if torch.cuda.is_available() else 0
 
-                # Forward with AMP
-                with torch.cuda.amp.autocast(enabled=(args.cuda and args.amp)):
-                    if args.model_name == "evobrain" or args.model_name == "evolvegcn" or args.model_name == "gru_gcn":
-                        logits, _ = model(x, seq_lengths, adj)
-                    elif args.model_name == "dcrnn":
-                        logits, _ = model(x, seq_lengths, supports)     
-                    elif args.model_name == "BIOT":
-                        logits, _ = model(x)  
-                    elif args.model_name == "lstm" or args.model_name == "cnnlstm" or args.model_name == "graphs4mer":
-                        logits, _ = model(x, seq_lengths)
-                    else:
-                        print("model_name: ", args.model_name)
-                        raise NotImplementedError
-                    
-                    if logits.shape[-1] == 1:
-                        logits = logits.view(-1)          
-                    target = y.long() if isinstance(loss_fn, nn.CrossEntropyLoss) else y.float()
-                    loss = loss_fn(logits, target)
-
-                # Skip step if loss is non-finite
-                if not torch.isfinite(loss):
-                    optimizer.zero_grad()
-                    progress_bar.update(batch_size)
-                    continue
-
+                if args.model_name == "evobrain" or args.model_name == "evolvegcn" or args.model_name == "gru_gcn":
+                    logits, _ = model(x, seq_lengths, adj)
+                elif args.model_name == "dcrnn":
+                    logits, _ = model(x, seq_lengths, supports)     
+                elif args.model_name == "BIOT":
+                    logits, _ = model(x)  
+                elif args.model_name == "lstm" or args.model_name == "cnnlstm" or args.model_name == "graphs4mer":
+                    logits, _ = model(x, seq_lengths)
+                else:
+                    print("model_name: ", args.model_name)
+                    raise NotImplementedError
+                if logits.shape[-1] == 1:
+                    logits = logits.view(-1)          
+                target = y.long() if isinstance(loss_fn, nn.CrossEntropyLoss) else y.float()
+                loss = loss_fn(logits, target)
                 loss_val = loss.item()
 
-                # Backward with GradScaler
-                scaler.scale(loss).backward()
-
-                # Unscale before clipping
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-
-                # Step optimizer and update scaler
-                scaler.step(optimizer)
-                scaler.update()
+                # Backward
+                loss.backward()
+                nn.utils.clip_grad_norm_(
+                    model.parameters(), args.max_grad_norm)
+                optimizer.step()
 
                 end_time = time.time()
                 max_memory = torch.cuda.max_memory_allocated(device) if torch.cuda.is_available() else 0
@@ -427,16 +393,11 @@ def train(model, dataloaders, args, device, save_dir, log, tbx):
                                        metric_val)
 
                 # Accumulate patience for early stopping
-                if args.maximize_metric:
-                    is_better = (prev_val_metric is None) or (metric_val > prev_val_metric)
-                else:
-                    is_better = (prev_val_metric is None) or (metric_val < prev_val_metric)
-                    
-                if is_better:
+                if eval_results['loss'] < prev_val_loss:
                     patience_count = 0
-                    prev_val_metric = metric_val
                 else:
                     patience_count += 1
+                prev_val_loss = eval_results['loss']
 
                 # Early stop
                 if patience_count == args.patience:
@@ -496,48 +457,47 @@ def evaluate(
             batch_size = x.shape[0]
 
             # Input seqs
-            x = torch.nan_to_num(x.to(device), nan=0.0, posinf=0.0, neginf=0.0)
+            x = x.to(device)
             y = y.view(-1).to(device)  # (batch_size,)
             seq_lengths = seq_lengths.view(-1).to(device)  # (batch_size,)
             supports = supports.to(device)
-            adj = torch.nan_to_num(adj.to(device), nan=0.0, posinf=1.0, neginf=0.0)
+            adj = adj.to(device)
 
             start_time = time.time()
-            # Forward with AMP
-            with torch.cuda.amp.autocast(enabled=(args.cuda and args.amp)):
-                if args.model_name == "evobrain":
-                    logits, hidden = model(x, seq_lengths, adj)
-                elif args.model_name == "gru_gcn":
-                    logits, hidden = model(x, seq_lengths, adj)
-                elif args.model_name == "dcrnn":
-                    logits, hidden = model(x, seq_lengths, supports)
-                elif args.model_name == "evolvegcn":
-                    logits, hidden = model(x, seq_lengths, adj)
-                elif args.model_name == "BIOT":
-                    logits, hidden = model(x)
-                elif args.model_name == "lstm" or args.model_name == "cnnlstm" or args.model_name == "graphs4mer":
-                    logits, hidden = model(x, seq_lengths)
-                else:
-                    raise NotImplementedError
+            # Forward
+            # (batch_size, num_classes)
+            if args.model_name == "evobrain":
+                logits, hidden = model(x, seq_lengths, adj)
+            elif args.model_name == "gru_gcn":
+                logits, hidden = model(x, seq_lengths, adj)
+            elif args.model_name == "dcrnn":
+                logits, hidden = model(x, seq_lengths, supports)
+            elif args.model_name == "evolvegcn":
+                logits, hidden = model(x, seq_lengths, adj)
+            elif args.model_name == "BIOT":
+                logits, hidden = model(x)
+            elif args.model_name == "lstm" or args.model_name == "cnnlstm" or args.model_name == "graphs4mer":
+                logits, hidden = model(x, seq_lengths)
+            else:
+                raise NotImplementedError
 
-                if args.num_classes == 1:  # binary detection
-                    logits = logits.view(-1)  # (batch_size,)
-                    y_prob = torch.sigmoid(logits).cpu().numpy()  # (batch_size, )
-                    y_true = y.cpu().numpy().astype(int)
-                    y_pred = (y_prob > best_thresh).astype(int)  # (batch_size, )
-                else:
-                    # (batch_size, num_classes)
-                    y_prob = F.softmax(logits, dim=1).cpu().numpy()
-                    y_pred = np.argmax(y_prob, axis=1).reshape(-1)  # (batch_size,)
-                    y_true = y.cpu().numpy().astype(int)
-                
-                target = y.long() if isinstance(loss_fn, nn.CrossEntropyLoss) else y.float()
-                loss = loss_fn(logits, target)
+            if args.num_classes == 1:  # binary detection
+                logits = logits.view(-1)  # (batch_size,)
+                y_prob = torch.sigmoid(logits).cpu().numpy()  # (batch_size, )
+                y_true = y.cpu().numpy().astype(int)
+                y_pred = (y_prob > best_thresh).astype(int)  # (batch_size, )
+            else:
+                # (batch_size, num_classes)
+                y_prob = F.softmax(logits, dim=1).cpu().numpy()
+                y_pred = np.argmax(y_prob, axis=1).reshape(-1)  # (batch_size,)
+                y_true = y.cpu().numpy().astype(int)
             
             time_list.append(time.time() - start_time)
             
 
             # Update loss
+            target = y.long() if isinstance(loss_fn, nn.CrossEntropyLoss) else y.float()
+            loss = loss_fn(logits, target)
             loss_meter.update(loss.item(), batch_size)
             if nll_meter is not None:
                 nll_meter.update(loss.item(), batch_size)
@@ -587,7 +547,7 @@ def evaluate(
     log.info(f"Average Test Time per Batch: {avg_time_per_batch:.4f} seconds")
 
     # Threshold search, for detection only
-    if ((args.task == "detection") or (args.task == "prediction")) and (eval_set == 'dev'):
+    if ((args.task == "detection") or (args.task == "prediction")) and (eval_set == 'dev') and is_test:
         best_thresh = utils.thresh_max_f1(y_true=y_true_all, y_prob=y_prob_all)
         # update dev set y_pred based on best_thresh
         y_pred_all = (y_prob_all > best_thresh).astype(int)  # (batch_size, )
