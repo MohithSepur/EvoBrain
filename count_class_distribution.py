@@ -302,6 +302,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print machine-readable JSON instead of tables",
     )
+    parser.add_argument(
+        "--chb-only",
+        action="store_true",
+        help="Count only CHB-MIT PKLs; do not inspect TUSZ marker files",
+    )
     return parser.parse_args()
 
 
@@ -312,24 +317,30 @@ def main() -> int:
     if args.sampling_ratio < 0:
         raise CountingError("--sampling-ratio must be non-negative")
 
-    tusz = count_tusz(
-        marker_dir=args.tusz_marker_dir,
-        max_seq_len=args.tusz_max_seq_len,
-        input_dir=args.tusz_input_dir,
-        seed=args.seed,
-        sampling_ratio=args.sampling_ratio,
-    )
+    tusz = None
+    if not args.chb_only:
+        tusz = count_tusz(
+            marker_dir=args.tusz_marker_dir,
+            max_seq_len=args.tusz_max_seq_len,
+            input_dir=args.tusz_input_dir,
+            seed=args.seed,
+            sampling_ratio=args.sampling_ratio,
+        )
     chb, warnings = count_chb(args.chb_pkl_dir)
 
     if args.json:
-        print(json.dumps({"TUSZ": tusz, "CHB-MIT": chb, "warnings": warnings}, indent=2))
+        output = {"CHB-MIT": chb, "warnings": warnings}
+        if tusz is not None:
+            output["TUSZ"] = tusz
+        print(json.dumps(output, indent=2))
     else:
-        tusz_rows = [
-            (split, stage, counts)
-            for split, stages in tusz.items()
-            for stage, counts in stages.items()
-        ]
-        _print_counts("TUSZ", tusz_rows)
+        if tusz is not None:
+            tusz_rows = [
+                (split, stage, counts)
+                for split, stages in tusz.items()
+                for stage, counts in stages.items()
+            ]
+            _print_counts("TUSZ", tusz_rows)
         _print_counts(
             "CHB-MIT PKL",
             [(split, "all_pkls", counts) for split, counts in chb.items()],
