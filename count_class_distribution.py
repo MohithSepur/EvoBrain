@@ -22,6 +22,7 @@ import sys
 from typing import Any
 
 import numpy as np
+from tqdm import tqdm
 
 
 SPLITS = ("train", "dev", "test")
@@ -240,7 +241,12 @@ def count_chb(data_dir: Path) -> tuple[dict[str, dict[str, Any]], list[str]]:
         files = _chb_files(split_dir, flat_root)
         counts = Counts()
         invalid_examples: list[str] = []
-        for path in files:
+        for path in tqdm(
+            files,
+            desc=f"CHB-MIT {split}",
+            unit="pkl",
+            dynamic_ncols=True,
+        ):
             try:
                 counts.add(_label_from_pkl(path))
             except Exception as exc:  # report bad data without hiding the other counts
